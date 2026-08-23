@@ -208,7 +208,7 @@ def get_chat_messages(
         limit: Número máximo de mensagens a retornar. SEMPRE ajuste este valor
                quando o usuário especificar quantidade (ex: "últimas 20", "50 mensagens")
                Padrão: 50 mensagens
-        page: Página (1-based). Use com limit para paginar conversas longas;
+        page: Página, começando em 1. Use com limit para paginar conversas longas;
               a resposta traz `messages.pages` com o total de páginas.
 
     Returns:
@@ -297,7 +297,7 @@ def find_messages(
         limit: Número máximo de mensagens a retornar. SEMPRE ajuste quando
                o usuário especificar quantidade
                Padrão: 50 mensagens
-        page: Página (1-based). Use com limit para paginar.
+        page: Página, começando em 1. Use com limit para paginar.
 
     Returns:
         dict: Lista de mensagens encontradas

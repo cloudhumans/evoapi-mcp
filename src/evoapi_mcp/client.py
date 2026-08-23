@@ -359,22 +359,23 @@ class EvolutionClient:
 
         Endpoint: POST /chat/findMessages/{instanceId}
 
-        The chat filter must be nested under `where.key.remoteJid`; a bare
-        top-level key is ignored by the API, which then returns every message
-        of every chat. Page size travels as `offset`, not `limit`.
+        O filtro de conversa precisa ir aninhado em `where.key.remoteJid`; uma
+        chave solta no topo do corpo é descartada pela API, que aí devolve
+        todas as mensagens de todas as conversas. O tamanho de página vai
+        como `offset`, não como `limit`.
 
         Args:
-            query: Case-insensitive text filter. Applied client-side over the
-                records of the requested page only, because the API ignores
-                `where.message`. Use a large limit if you need wider coverage.
-            chat_id: Phone number or JID of the chat. Resolved through
-                resolve_chat_jid, so `@lid` and `@g.us` chats work too.
-            limit: Page size (sent to the API as `offset`)
-            page: 1-based page number
+            query: Filtro de texto, case-insensitive. Aplicado no cliente e
+                apenas sobre os registros da página buscada, porque a API
+                descarta `where.message`. Use um limit alto pra varrer mais.
+            chat_id: Número ou JID da conversa. Resolvido por resolve_chat_jid,
+                então conversas `@lid` e `@g.us` também funcionam.
+            limit: Tamanho da página (vai pra API como `offset`)
+            page: Número da página, começando em 1
 
         Returns:
-            dict: Lista de mensagens. When query is used, `messages` also
-                carries a `clientSideFilter` report of what was scanned.
+            dict: Lista de mensagens. Quando query é usado, `messages` também
+                traz um relatório `clientSideFilter` do que foi varrido.
 
         Raises:
             EvolutionAPIError: Se houver erro na requisição
@@ -401,19 +402,20 @@ class EvolutionClient:
         return result
 
     def _apply_text_filter(self, result: Any, query: str) -> Any:
-        """Filter a findMessages response by message text, client-side.
+        """Filtra uma resposta de findMessages por texto, no cliente.
 
-        Evolution API silently drops `where.message`, so text search cannot be
-        pushed to the server: it only sees the records of the current page.
-        The `clientSideFilter` report makes that scope explicit instead of
-        letting an empty result read as "nothing was ever said".
+        A Evolution API descarta `where.message` em silêncio, então busca de
+        texto não pode ser empurrada pro servidor: o filtro só vê os registros
+        da página atual. O relatório `clientSideFilter` deixa esse escopo
+        explícito, em vez de deixar um resultado vazio parecer que nada foi
+        dito.
 
         Args:
-            result: Raw findMessages response
-            query: Case-insensitive substring to look for in the message text
+            result: Resposta bruta do findMessages
+            query: Trecho de texto a procurar, case-insensitive
 
         Returns:
-            The response with `records` reduced to the matches.
+            A mesma resposta, com `records` reduzido aos que casaram.
         """
         block = result.get("messages") if isinstance(result, dict) else None
         if not isinstance(block, dict) or not isinstance(block.get("records"), list):
@@ -438,13 +440,14 @@ class EvolutionClient:
 
     @staticmethod
     def _message_text(record: dict[str, Any]) -> str:
-        """Extract the human-readable text of a message record.
+        """Extrai o texto legível de um registro de mensagem.
 
         Args:
-            record: One entry of `messages.records`
+            record: Um item de `messages.records`
 
         Returns:
-            str: The text or caption, empty when the message carries neither.
+            str: O texto ou a legenda, vazio quando a mensagem não tem nenhum
+                dos dois.
         """
         message = record.get("message") or {}
 
@@ -458,23 +461,23 @@ class EvolutionClient:
         )
 
     def resolve_chat_jid(self, identifier: str) -> str:
-        """Resolve a number or JID into the JID the chat is actually stored under.
+        """Resolve um número ou JID pro JID em que a conversa está de fato salva.
 
-        WhatsApp addresses many chats as `<opaque>@lid` rather than
-        `<number>@s.whatsapp.net`, so the JID cannot be built from the number:
-        the phone number only shows up at `lastMessage.key.remoteJidAlt`.
-        Anything already containing '@' passes through untouched, which is what
-        makes groups and explicit JIDs work.
+        O WhatsApp endereça muita conversa como `<opaco>@lid` em vez de
+        `<numero>@s.whatsapp.net`, então o JID não pode ser montado a partir do
+        número: o telefone só aparece em `lastMessage.key.remoteJidAlt`.
+        Qualquer coisa que já contenha '@' é repassada intacta, e é isso que
+        faz grupo e JID explícito funcionarem.
 
-        Only successful matches are cached. A fallback is never cached, so a
-        chat that shows up later is still found.
+        Só resolução bem-sucedida entra no cache. O fallback nunca é cacheado,
+        pra que uma conversa que apareça depois ainda seja encontrada.
 
         Args:
-            identifier: Phone number in international format, or a full JID
+            identifier: Número no formato internacional, ou um JID completo
 
         Returns:
-            str: The resolved JID, falling back to `<number>@s.whatsapp.net`
-                when the chat list has no match.
+            str: O JID resolvido, caindo pra `<numero>@s.whatsapp.net` quando a
+                lista de conversas não tem nenhuma correspondência.
 
         Raises:
             InvalidPhoneNumberError: Se o identificador não for JID nem número válido
@@ -493,7 +496,7 @@ class EvolutionClient:
             chats = self.find_chats(enrich_with_names=False)
         except EvolutionAPIError:
             self._log(
-                f"Could not list chats to resolve {clean_number}; using {fallback}",
+                f"Falha ao listar conversas pra resolver {clean_number}; usando {fallback}",
                 "WARNING"
             )
             return fallback
@@ -507,25 +510,25 @@ class EvolutionClient:
                 return remote_jid
 
         self._log(
-            f"No chat found for {clean_number}; using {fallback}",
+            f"Nenhuma conversa encontrada para {clean_number}; usando {fallback}",
             "WARNING"
         )
 
         return fallback
 
     def resolve_send_target(self, number: str) -> str:
-        """Normalize a send destination without inventing a JID.
+        """Normaliza um destino de envio sem inventar um JID.
 
-        A bare number is validated and normalized. A JID passes through
-        untouched: stripping the non-digits of `260992344797194@lid` would
-        yield a 15-digit string that passes phone validation and addresses a
-        different, possibly real, recipient.
+        Número puro é validado e normalizado. JID é repassado intacto: remover
+        os não-dígitos de `260992344797194@lid` daria uma string de 15 dígitos
+        que passa na validação de telefone e endereça outro destinatário,
+        possivelmente real.
 
         Args:
-            number: Phone number in international format, or a full JID
+            number: Número no formato internacional, ou um JID completo
 
         Returns:
-            str: The destination to hand to the API
+            str: O destino a entregar pra API
 
         Raises:
             InvalidPhoneNumberError: Se o número for inválido
@@ -537,14 +540,14 @@ class EvolutionClient:
 
     @staticmethod
     def _personal_jid_number(remote_jid: str) -> str:
-        """Extract the phone number of a personal JID.
+        """Extrai o número de telefone de um JID de contato.
 
         Args:
-            remote_jid: A JID such as `5511999999999@s.whatsapp.net`
+            remote_jid: Um JID como `5511999999999@s.whatsapp.net`
 
         Returns:
-            str: The digits, or empty for group and `@lid` JIDs, whose local
-                part is an opaque id rather than a phone number.
+            str: Os dígitos, ou vazio para JID de grupo e `@lid`, cuja parte
+                local é um id opaco e não um número de telefone.
         """
         if not remote_jid.endswith(PERSONAL_JID_SUFFIX):
             return ""
@@ -553,14 +556,14 @@ class EvolutionClient:
 
     @staticmethod
     def _chat_alt_number(chat: dict[str, Any]) -> str:
-        """Extract the phone number a `@lid` chat maps to.
+        """Extrai o número de telefone pro qual uma conversa `@lid` aponta.
 
         Args:
-            chat: One entry of the findChats response
+            chat: Um item da resposta do findChats
 
         Returns:
-            str: The digits of `lastMessage.key.remoteJidAlt`, or empty when
-                the API does not expose it.
+            str: Os dígitos de `lastMessage.key.remoteJidAlt`, ou vazio quando
+                a API não expõe esse campo.
         """
         key = (chat.get("lastMessage") or {}).get("key") or {}
         alt = key.get("remoteJidAlt") or ""
@@ -576,10 +579,10 @@ class EvolutionClient:
         """Obtém mensagens de uma conversa por número.
 
         Args:
-            number: Phone number in international format, or a full JID
-                (groups and `@lid` contacts included)
+            number: Número no formato internacional, ou um JID completo
+                (grupos e contatos `@lid` inclusos)
             limit: Número máximo de mensagens
-            page: 1-based page number
+            page: Número da página, começando em 1
 
         Returns:
             dict: Mensagens da conversa

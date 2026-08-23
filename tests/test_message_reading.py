@@ -45,7 +45,7 @@ class Recorder:
         for fragment, payload in self.routes.items():
             if fragment in kwargs["url"]:
                 return FakeResponse(payload)
-        raise AssertionError(f"unexpected URL: {kwargs['url']}")
+        raise AssertionError(f"URL inesperada: {kwargs['url']}")
 
     def bodies(self, fragment):
         return [call["json"] for call in self.calls if fragment in call["url"]]
