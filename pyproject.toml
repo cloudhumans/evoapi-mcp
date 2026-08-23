@@ -1,6 +1,6 @@
 [project]
 name = "evoapi-mcp"
-version = "1.1.0"
+version = "1.2.0"
 description = "MCP Server para Evolution API - Envio de mensagens WhatsApp"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,6 +13,9 @@ dependencies = [
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
 ]
+
+[project.scripts]
+evoapi-mcp = "evoapi_mcp.server:main"
 
 [project.optional-dependencies]
 dev = [
