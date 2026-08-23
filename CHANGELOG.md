@@ -7,6 +7,69 @@ e este projeto adere ao [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ---
 
+## [1.2.0] - 2026-08-23
+
+### 🐛 A Leitura de Mensagens Nunca Funcionou
+
+Toda tool de leitura devolvia um feed global sem filtro em vez da conversa pedida. Como o
+retorno era um JSON plausível em vez de um erro, isso se apresentava como "nenhuma
+mensagem encontrada". Se você usou este servidor para triar conversas, **os resultados
+anteriores não valem nada** — as conversas não foram lidas.
+
+Diagnóstico reproduzido contra uma instância real (Evolution API v2, 831 conversas).
+Detalhes e medições em [KNOWN_ISSUES.md](KNOWN_ISSUES.md) (issues #9 a #13).
+
+### 🔧 Corrigido
+
+#### Leitura de mensagens
+- **`find_messages()` manda o filtro em `where.key.remoteJid`.** Antes mandava
+  `{"chatId": ...}` solto no topo do corpo; a Evolution API descarta chaves
+  desconhecidas em silêncio e devolvia a coleção inteira (104195 registros de 14 chats
+  onde o correto eram 91 de 1).
+- **`limit` virou `offset`** — o parâmetro de tamanho de página da Evolution API. Antes
+  todo chamador recebia exatamente 50 registros, sempre.
+- **Paginação de verdade:** parâmetro `page` em `find_messages()`,
+  `get_messages_by_number()`, nas tools MCP `find_messages` / `get_chat_messages` e no
+  endpoint `GET /messages/{number}`.
+
+#### Endereçamento de conversas
+- **`resolve_chat_jid()` resolve número → JID real.** O WhatsApp endereça muitas
+  conversas como `<opaco>@lid`, onde o número só aparece em
+  `lastMessage.key.remoteJidAlt` — na instância de teste, 337 `@lid` + 235 `@g.us` de
+  831 conversas, ou seja **cerca de 69% eram inalcançáveis** montando
+  `{numero}@s.whatsapp.net` à mão.
+- **Grupos podem ser lidos.** `get_chat_messages` / `get_messages_by_number` aceitam um
+  JID completo; antes `validate_phone_number()` rejeitava `@g.us` de saída.
+- **Envio não transforma mais um JID em outro número.** `resolve_send_target()` repassa o
+  JID intacto: remover os não-dígitos de `260992344797194@lid` produz uma string de 15
+  dígitos que passa na validação de telefone e endereça outro destinatário.
+- **O mapa de contatos não indexa mais um `@lid` como telefone**, e o enriquecimento de
+  nomes de uma conversa `@lid` passou a usar `remoteJidAlt`.
+
+#### HTTP server
+- **`GET /chats` voltou a funcionar.** Chamava `client.find_chats(limit=limit)`, mas
+  `find_chats()` não tem esse parâmetro — o endpoint sempre estourava com `TypeError`.
+  O `response_model` também declarava `dict` onde a resposta é `list`.
+
+### ✨ Adicionado
+
+- **`tests/test_message_reading.py`** — 24 testes de regressão com a camada HTTP mockada
+  (nada de instância viva): forma do corpo da requisição (`where` presente, `offset`
+  carregando o tamanho de página), resolução de `@lid`, repasse de JID de grupo,
+  paginação, cache de JID e não-cache do fallback, e o filtro de texto client-side.
+  20 deles falham no código anterior.
+- **`messages.clientSideFilter`** na resposta quando `query` é usado, com
+  `{query, scope, scanned, matched}`.
+
+### ⚠️ Limitação Conhecida
+
+`query` é um filtro **client-side sobre a página buscada**, não uma busca no servidor.
+A Evolution API descarta `where.message` (verificado: um termo impossível ainda devolve
+todos os registros do chat), então não há como empurrar busca de texto para o banco. Um
+`find_messages(query=...)` sem `chat_id` varre só as `limit` mensagens mais recentes da
+instância e não prova ausência do termo. O campo `clientSideFilter` existe para deixar
+esse escopo explícito.
+
 ## [1.1.0] - 2025-10-24
 
 ### 🐳 Docker & HTTP Support

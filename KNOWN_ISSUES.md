@@ -2,7 +2,7 @@
 
 Problemas conhecidos, limitações e workarounds.
 
-**Última atualização:** 2025-10-23
+**Última atualização:** 2026-08-23
 
 ---
 
@@ -188,6 +188,163 @@ Implementadas validações completas em `send_media()` e `send_text()`:
 - Todas as validações lançam `ValueError` com mensagens descritivas antes da chamada à API
 
 ---
+
+### Issue #9: `find_messages()` Ignora o Filtro de Chat em Silêncio
+
+**Status:** ✅ Resolvido (2026-08-23)
+**Prioridade:** Alta
+**Arquivo:** `src/evoapi_mcp/client.py` (`find_messages`)
+
+**Descrição:**
+O corpo da requisição mandava as chaves de filtro soltas no topo do JSON:
+
+```python
+payload = {}
+if query:
+    payload["query"] = query
+if chat_id:
+    payload["chatId"] = chat_id
+if limit:
+    payload["limit"] = limit
+```
+
+`POST /chat/findMessages/{instance}` espera o filtro dentro de um objeto `where`.
+Chaves desconhecidas no topo são descartadas sem erro, então a API devolvia a coleção
+inteira. Medido no mesmo chat de uma instância com 831 conversas:
+
+| Corpo | total | remoteJids distintos |
+|---|---|---|
+| `{"where":{"key":{"remoteJid": JID}}}` | 91 | 1 (correto) |
+| `{"chatId": JID, "limit": 20}` | 104195 | 14 (sem filtro) |
+
+**Impacto:**
+Toda leitura de mensagem devolvia um feed global. Como o retorno era um JSON plausível
+em vez de um erro, isso se apresentava como "nenhuma mensagem encontrada" — várias
+triagens reportaram conversas como limpas quando elas simplesmente nunca foram lidas.
+Este é o pior tipo de bug: falha silenciosa com aparência de sucesso.
+
+**Solução Aplicada:**
+`find_messages()` agora manda `where.key.remoteJid`. O mesmo arquivo já usava o padrão
+correto em `fetch_contacts()` (`payload["where"] = {"id": contact_id}`) — era uma
+inconsistência interna, não uma ambiguidade da API.
+
+---
+
+### Issue #10: Endereçamento `@lid` Não é Tratado
+
+**Status:** ✅ Resolvido (2026-08-23)
+**Prioridade:** Alta
+**Arquivo:** `src/evoapi_mcp/client.py` (`get_messages_by_number`)
+
+**Descrição:**
+O JID era construído à mão a partir do número:
+
+```python
+clean_number = self.validate_phone_number(number)
+chat_id = f"{clean_number}@s.whatsapp.net"
+```
+
+O WhatsApp endereça muitas conversas como `<opaco>@lid` (ex: `260992344797194@lid`),
+onde o número de telefone só aparece em `chat.lastMessage.key.remoteJidAlt`. Na
+instância de teste: **337 `@lid` + 235 `@g.us` de 831 conversas — cerca de 69%
+inalcançáveis** por essa construção. `validate_phone_number()` também rejeita JID de
+grupo ("Número inválido"), então grupos nunca podiam ser lidos por essa porta de entrada.
+
+**Impacto:**
+Ler uma conversa pelo número falhava para a maioria das conversas, e grupos eram
+inacessíveis por completo.
+
+**Solução Aplicada:**
+Novo `resolve_chat_jid()`: repassa qualquer coisa com `@` (grupos e JIDs explícitos) e
+resolve um número contra `find_chats()`, comparando `remoteJid` e
+`lastMessage.key.remoteJidAlt`. Só resolução bem-sucedida entra no cache — o fallback
+`{numero}@s.whatsapp.net` nunca é cacheado, para que uma conversa que apareça depois
+ainda seja encontrada.
+
+---
+
+### Issue #11: `limit` é Ignorado; o Parâmetro de Página é `offset`
+
+**Status:** ✅ Resolvido (2026-08-23)
+**Prioridade:** Alta
+**Arquivo:** `src/evoapi_mcp/client.py` (`find_messages`)
+
+**Descrição:**
+A Evolution API usa `offset` como tamanho de página e `page` como número da página.
+Um `limit` no topo do corpo não faz nada:
+
+| Corpo | registros |
+|---|---|
+| `{"where":…, "limit": 10}` | 50 |
+| `{"where":…, "offset": 10}` | 10 |
+| `{"where":…, "page": 2, "offset": 10}` | 10 (página 2) |
+
+**Impacto:**
+Todo chamador recebia exatamente 50 registros, sem jeito de paginar — uma conversa com
+629 mensagens era irrecuperável além das 50 primeiras.
+
+**Solução Aplicada:**
+`limit` é mapeado para `offset` e um parâmetro `page` foi adicionado a
+`find_messages()`, `get_messages_by_number()`, às tools MCP `find_messages` e
+`get_chat_messages`, e ao endpoint `GET /messages/{number}`.
+
+---
+
+### Issue #12: `@lid` Tratado como Número em Envios e no Mapa de Contatos
+
+**Status:** ✅ Resolvido (2026-08-23)
+**Prioridade:** Alta
+**Arquivo:** `src/evoapi_mcp/client.py` (`send_text`, `send_media`, `set_presence`, `_build_contacts_map`)
+
+**Descrição:**
+Encontrado auditando a mesma classe de bug das issues #9-#11. Os envios normalizavam o
+destino com `validate_phone_number()`, que remove os não-dígitos: `260992344797194@lid`
+virava `260992344797194`, uma string de 15 dígitos que **passa** na validação de telefone
+e endereça um destinatário diferente — possivelmente real. Um JID de grupo era rejeitado,
+o que ao menos falhava alto.
+
+`_build_contacts_map()` e o enriquecimento de nomes em `find_chats()` faziam
+`remote_jid.replace("@s.whatsapp.net", "")` seguido de remoção de não-dígitos, o que
+indexa o id opaco de um `@lid` como se fosse número de telefone.
+
+**Impacto:**
+Mandar mensagem para o destinatário errado, silenciosamente. Nomes de contato
+potencialmente cruzados entre pessoas diferentes.
+
+**Solução Aplicada:**
+Novo `resolve_send_target()`: repassa JID intacto, valida número puro. Novo
+`_personal_jid_number()`, que só extrai número de JID `@s.whatsapp.net` e devolve vazio
+para `@lid`/`@g.us`. O enriquecimento de `find_chats()` passou a usar
+`lastMessage.key.remoteJidAlt` para achar o nome de uma conversa `@lid`.
+
+O envio para grupo e para `@lid` **não foi verificado ao vivo** (mandar mensagem de
+teste para terceiros estava fora de escopo); o que foi verificado é que o JID chega
+intacto ao corpo da requisição em vez de ser transformado em outro número.
+
+---
+
+### Issue #13: A API Não Suporta Busca de Texto no Servidor
+
+**Status:** 🟢 Aberto (limitação da Evolution API, não do MCP)
+**Prioridade:** Média
+**Arquivo:** `src/evoapi_mcp/client.py` (`_apply_text_filter`)
+
+**Descrição:**
+`POST /chat/findMessages` descarta `where.message` por completo. Verificado contra uma
+instância real (196 mensagens no chat): buscar por um termo impossível
+(`zzzzzzUNLIKELYzzzzz`) ainda devolve as 196. Só `where.key` chega ao Prisma — e
+`key.fromMe: false` também é descartado, por ser falsy no controller.
+
+**Impacto:**
+`query` só pode ser aplicado no cliente, ou seja **apenas sobre a página buscada**. Um
+`find_messages(query=...)` sem `chat_id` varre só as `limit` mensagens mais recentes da
+instância inteira e **não prova** que o termo nunca foi dito.
+
+**Workaround Atual:**
+O filtro client-side agora devolve `messages.clientSideFilter` com
+`{query, scope, scanned, matched}`, para que um resultado vazio mostre o que foi de fato
+varrido em vez de parecer uma resposta definitiva. Para buscar dentro de uma conversa,
+passe `chat_id` com um `limit` alto e pagine.
 
 ## 🟡 Médio
 
@@ -393,13 +550,13 @@ Docstrings bem detalhadas ajudam o LLM a escolher certo.
 ## 📊 Estatísticas
 
 ### Por Prioridade
-- 🔴 Crítico: 0 issues abertas (3 resolvidas)
-- 🟡 Médio: 3 issues
+- 🔴 Crítico: 0 issues abertas (7 resolvidas)
+- 🟡 Médio: 4 issues (1 é limitação da API upstream)
 - 🟢 Baixo: 2 issues
 
 ### Por Status
-- 🔴 Aberto: 5 issues
-- ✅ Resolvido: 3 issues (FASE 1 completa!)
+- 🔴 Aberto: 6 issues
+- ✅ Resolvido: 7 issues
 
 ---
 
@@ -413,6 +570,19 @@ Implementado TTL de 5 minutos com métodos `_is_cache_expired()` e `clear_cache(
 
 ### ✅ Issue #3: Sem Validação de media_type (Resolvido em 2025-10-23)
 Adicionadas validações completas para media_type, URLs e tamanhos de texto/caption.
+
+### ✅ Issue #9: Filtro de Chat Ignorado (Resolvido em 2026-08-23)
+`find_messages()` passou a mandar `where.key.remoteJid` em vez de `chatId` solto no topo.
+
+### ✅ Issue #10: Endereçamento `@lid` (Resolvido em 2026-08-23)
+`resolve_chat_jid()` resolve número → JID real (`@lid` incluso) e repassa JID de grupo.
+
+### ✅ Issue #11: `limit` Ignorado (Resolvido em 2026-08-23)
+`limit` virou `offset` e um parâmetro `page` foi adicionado à leitura de mensagens.
+
+### ✅ Issue #12: `@lid` Como Número em Envios (Resolvido em 2026-08-23)
+`resolve_send_target()` e `_personal_jid_number()` pararam de transformar um JID `@lid`
+em um número de telefone diferente.
 
 ---
 
@@ -450,4 +620,4 @@ Adicionadas validações completas para media_type, URLs e tamanhos de texto/cap
 
 ---
 
-**Última revisão:** 2025-10-23
+**Última revisão:** 2026-08-23
