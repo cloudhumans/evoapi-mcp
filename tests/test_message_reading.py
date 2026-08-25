@@ -1,6 +1,7 @@
 """Regressões da leitura de mensagens, com a camada HTTP mockada."""
 
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -316,3 +317,30 @@ def test_personal_jid_number_refuses_to_read_a_lid_as_a_phone_number():
     assert EvolutionClient._personal_jid_number(PERSONAL_JID) == NUMBER
     assert EvolutionClient._personal_jid_number(LID_JID) == ""
     assert EvolutionClient._personal_jid_number(GROUP_JID) == ""
+
+
+def test_a_cached_jid_expires_with_the_contacts_ttl(client, recorder):
+    rec = recorder({FIND_CHATS: [LID_CHAT], FIND_MESSAGES: make_messages("oi")})
+
+    def read_twice_across_the_ttl():
+        client.find_messages(chat_id=NUMBER, limit=5)
+        stale = datetime.now() - client._cache_ttl - timedelta(seconds=1)
+        client._jid_cache[NUMBER] = (LID_JID, stale)
+        client.find_messages(chat_id=NUMBER, limit=5)
+
+    run(rec, read_twice_across_the_ttl)
+
+    assert rec.count(FIND_CHATS) == 2
+
+
+def test_clear_cache_also_clears_the_jid_cache(client, recorder):
+    rec = recorder({FIND_CHATS: [LID_CHAT], FIND_MESSAGES: make_messages("oi")})
+
+    def read_clear_read():
+        client.find_messages(chat_id=NUMBER, limit=5)
+        client.clear_cache()
+        client.find_messages(chat_id=NUMBER, limit=5)
+
+    run(rec, read_clear_read)
+
+    assert rec.count(FIND_CHATS) == 2

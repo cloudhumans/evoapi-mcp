@@ -66,7 +66,7 @@ class EvolutionClient:
 
         # Cache de nomes de contatos (número -> nome)
         self._contact_names_cache: dict[str, str | None] = {}
-        self._jid_cache: dict[str, str] = {}
+        self._jid_cache: dict[str, tuple[str, datetime]] = {}
         self._cache_timestamp: datetime | None = None
         self._cache_ttl = timedelta(minutes=5)  # Cache expira após 5 minutos
 
@@ -174,7 +174,7 @@ class EvolutionClient:
         return datetime.now() - self._cache_timestamp > self._cache_ttl
 
     def clear_cache(self) -> None:
-        """Limpa o cache de nomes de contatos.
+        """Limpa o cache de nomes de contatos e o de JIDs resolvidos.
 
         Este método é útil quando você quer forçar a atualização dos nomes
         dos contatos sem precisar reiniciar o cliente.
@@ -183,6 +183,7 @@ class EvolutionClient:
             client.clear_cache()  # Cache será reconstruído na próxima chamada
         """
         self._contact_names_cache.clear()
+        self._jid_cache.clear()
         self._cache_timestamp = None
         self._log("Cache de contatos limpo")
 
@@ -469,8 +470,12 @@ class EvolutionClient:
         Qualquer coisa que já contenha '@' é repassada intacta, e é isso que
         faz grupo e JID explícito funcionarem.
 
-        Só resolução bem-sucedida entra no cache. O fallback nunca é cacheado,
-        pra que uma conversa que apareça depois ainda seja encontrada.
+        Só resolução bem-sucedida entra no cache, e cada entrada expira com o
+        mesmo TTL do cache de contatos: o WhatsApp está migrando conversa de
+        `@s.whatsapp.net` pra `@lid`, então um JID cacheado pra sempre voltaria
+        a devolver conversa vazia depois da migração. O fallback nunca é
+        cacheado, pra que uma conversa que apareça depois ainda seja
+        encontrada.
 
         Args:
             identifier: Número no formato internacional, ou um JID completo
@@ -487,8 +492,8 @@ class EvolutionClient:
 
         clean_number = self.validate_phone_number(identifier)
         cached = self._jid_cache.get(clean_number)
-        if cached:
-            return cached
+        if cached and datetime.now() - cached[1] <= self._cache_ttl:
+            return cached[0]
 
         fallback = f"{clean_number}{PERSONAL_JID_SUFFIX}"
 
@@ -506,7 +511,7 @@ class EvolutionClient:
             if not remote_jid:
                 continue
             if remote_jid == fallback or self._chat_alt_number(chat) == clean_number:
-                self._jid_cache[clean_number] = remote_jid
+                self._jid_cache[clean_number] = (remote_jid, datetime.now())
                 return remote_jid
 
         self._log(
