@@ -525,7 +525,7 @@ class EvolutionClient:
         """Normaliza um destino de envio sem inventar um JID.
 
         Número puro é validado e normalizado. JID é repassado intacto: remover
-        os não-dígitos de `260992344797194@lid` daria uma string de 15 dígitos
+        os não-dígitos de `100000000000000@lid` daria uma string de 15 dígitos
         que passa na validação de telefone e endereça outro destinatário,
         possivelmente real.
 

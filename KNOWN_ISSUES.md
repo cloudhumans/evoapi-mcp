@@ -244,7 +244,7 @@ clean_number = self.validate_phone_number(number)
 chat_id = f"{clean_number}@s.whatsapp.net"
 ```
 
-O WhatsApp endereça muitas conversas como `<opaco>@lid` (ex: `260992344797194@lid`),
+O WhatsApp endereça muitas conversas como `<opaco>@lid` (ex: `100000000000000@lid`),
 onde o número de telefone só aparece em `chat.lastMessage.key.remoteJidAlt`. Na
 instância de teste: **337 `@lid` + 235 `@g.us` de 831 conversas — cerca de 69%
 inalcançáveis** por essa construção. `validate_phone_number()` também rejeita JID de
@@ -298,8 +298,8 @@ Todo chamador recebia exatamente 50 registros, sem jeito de paginar — uma conv
 
 **Descrição:**
 Encontrado auditando a mesma classe de bug das issues #9-#11. Os envios normalizavam o
-destino com `validate_phone_number()`, que remove os não-dígitos: `260992344797194@lid`
-virava `260992344797194`, uma string de 15 dígitos que **passa** na validação de telefone
+destino com `validate_phone_number()`, que remove os não-dígitos: `100000000000000@lid`
+virava `100000000000000`, uma string de 15 dígitos que **passa** na validação de telefone
 e endereça um destinatário diferente — possivelmente real. Um JID de grupo era rejeitado,
 o que ao menos falhava alto.
 

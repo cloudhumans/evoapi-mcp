@@ -41,7 +41,7 @@ Detalhes e medições em [KNOWN_ISSUES.md](KNOWN_ISSUES.md) (issues #9 a #13).
 - **Grupos podem ser lidos.** `get_chat_messages` / `get_messages_by_number` aceitam um
   JID completo; antes `validate_phone_number()` rejeitava `@g.us` de saída.
 - **Envio não transforma mais um JID em outro número.** `resolve_send_target()` repassa o
-  JID intacto: remover os não-dígitos de `260992344797194@lid` produz uma string de 15
+  JID intacto: remover os não-dígitos de `100000000000000@lid` produz uma string de 15
   dígitos que passa na validação de telefone e endereça outro destinatário.
 - **O mapa de contatos não indexa mais um `@lid` como telefone**, e o enriquecimento de
   nomes de uma conversa `@lid` passou a usar `remoteJidAlt`.

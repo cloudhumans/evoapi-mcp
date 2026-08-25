@@ -39,7 +39,7 @@ def send_text_message(
     Args:
         number: Número no formato internacional sem '+' (ex: 5511999999999)
                OU um JID completo, para grupos (ex: 1203630000@g.us) e contatos
-               com o endereçamento novo (ex: 260992344797194@lid)
+               com o endereçamento novo (ex: 100000000000000@lid)
         text: Texto da mensagem a ser enviada
         link_preview: Se deve mostrar preview de links (padrão: True)
 
@@ -203,7 +203,7 @@ def get_chat_messages(
     Args:
         number: Número no formato internacional sem '+' (ex: 5511999999999)
                OU um JID completo, para grupos (ex: 1203630000@g.us) e contatos
-               com o endereçamento novo (ex: 260992344797194@lid). Um número é
+               com o endereçamento novo (ex: 100000000000000@lid). Um número é
                resolvido contra a lista de chats, então funciona nos dois casos.
         limit: Número máximo de mensagens a retornar. SEMPRE ajuste este valor
                quando o usuário especificar quantidade (ex: "últimas 20", "50 mensagens")
@@ -292,7 +292,7 @@ def find_messages(
         query: Termo de busca nas mensagens. Filtro client-side, case-insensitive,
                limitado à página buscada (veja o aviso acima)
         chat_id: Número OU JID do chat (ex: 5511999999999, 5511999999999@s.whatsapp.net,
-                 260992344797194@lid, 120363000000000000@g.us). É o único jeito de ler
+                 100000000000000@lid, 120363000000000000@g.us). É o único jeito de ler
                  um grupo. Um número é resolvido contra a lista de chats.
         limit: Número máximo de mensagens a retornar. SEMPRE ajuste quando
                o usuário especificar quantidade

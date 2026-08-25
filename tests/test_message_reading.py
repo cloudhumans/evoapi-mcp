@@ -16,7 +16,7 @@ from evoapi_mcp.config import EvolutionConfig
 
 NUMBER = "5511999999999"
 PERSONAL_JID = f"{NUMBER}@s.whatsapp.net"
-LID_JID = "260992344797194@lid"
+LID_JID = "100000000000000@lid"
 GROUP_JID = "120363000000000000@g.us"
 
 FIND_MESSAGES = "/chat/findMessages/"
