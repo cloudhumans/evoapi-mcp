@@ -142,14 +142,17 @@ async def health_check():
 # ENDPOINTS - CHAT OPERATIONS
 # =============================================================================
 
-@app.get("/chats", response_model=dict[str, Any])
+@app.get("/chats", response_model=list[dict[str, Any]])
 async def get_chats(limit: int = 50):
     """Lista conversas recentes com enriquecimento de nomes."""
     if not client:
         raise HTTPException(status_code=503, detail="Cliente não inicializado")
 
     try:
-        return client.find_chats(limit=limit)
+        chats = client.find_chats()
+        if isinstance(chats, list):
+            return chats[:limit]
+        return chats
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -170,13 +173,13 @@ async def get_contacts(contact_id: str | None = None, limit: int | None = None):
 
 
 @app.get("/messages/{number}", response_model=dict[str, Any])
-async def get_messages(number: str, limit: int = 50):
-    """Busca mensagens de uma conversa."""
+async def get_messages(number: str, limit: int = 50, page: int = 1):
+    """Busca mensagens de uma conversa, por número ou JID."""
     if not client:
         raise HTTPException(status_code=503, detail="Cliente não inicializado")
 
     try:
-        return client.get_messages_by_number(number=number, limit=limit)
+        return client.get_messages_by_number(number=number, limit=limit, page=page)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

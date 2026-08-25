@@ -38,6 +38,8 @@ def send_text_message(
 
     Args:
         number: Número no formato internacional sem '+' (ex: 5511999999999)
+               OU um JID completo, para grupos (ex: 1203630000@g.us) e contatos
+               com o endereçamento novo (ex: 100000000000000@lid)
         text: Texto da mensagem a ser enviada
         link_preview: Se deve mostrar preview de links (padrão: True)
 
@@ -188,7 +190,8 @@ def send_audio(
 @mcp.tool()
 def get_chat_messages(
     number: str,
-    limit: int = 50
+    limit: int = 50,
+    page: int = 1
 ) -> dict:
     """Obtém mensagens de uma conversa específica por número de telefone.
 
@@ -199,9 +202,14 @@ def get_chat_messages(
 
     Args:
         number: Número no formato internacional sem '+' (ex: 5511999999999)
+               OU um JID completo, para grupos (ex: 1203630000@g.us) e contatos
+               com o endereçamento novo (ex: 100000000000000@lid). Um número é
+               resolvido contra a lista de chats, então funciona nos dois casos.
         limit: Número máximo de mensagens a retornar. SEMPRE ajuste este valor
                quando o usuário especificar quantidade (ex: "últimas 20", "50 mensagens")
                Padrão: 50 mensagens
+        page: Página, começando em 1. Use com limit para paginar conversas longas;
+              a resposta traz `messages.pages` com o total de páginas.
 
     Returns:
         dict: Lista de mensagens da conversa
@@ -212,8 +220,14 @@ def get_chat_messages(
 
         # Últimas 20 mensagens
         messages = get_chat_messages(number="5511999999999", limit=20)
+
+        # Um grupo, por JID
+        messages = get_chat_messages(number="120363000000000000@g.us", limit=20)
+
+        # Segunda página de 20
+        messages = get_chat_messages(number="5511999999999", limit=20, page=2)
     """
-    return client.get_messages_by_number(number=number, limit=limit)
+    return client.get_messages_by_number(number=number, limit=limit, page=page)
 
 
 @mcp.tool()
@@ -256,7 +270,8 @@ def list_chats(limit: int | None = None) -> list:
 def find_messages(
     query: str | None = None,
     chat_id: str | None = None,
-    limit: int = 50
+    limit: int = 50,
+    page: int = 1
 ) -> dict:
     """Busca mensagens com filtros avançados em todas as conversas.
 
@@ -265,29 +280,39 @@ def find_messages(
     - "encontre mensagens sobre pedido"
     - "mensagens que contenham reunião"
 
+    ATENÇÃO ao usar `query`: a Evolution API não suporta busca por texto no
+    servidor, então o filtro é aplicado no cliente, APENAS sobre a página que
+    foi buscada. Um `query` sem `chat_id` varre só as `limit` mensagens mais
+    recentes da instância inteira e NÃO prova que o termo nunca foi dito.
+    Para buscar dentro de uma conversa, passe `chat_id` junto com um `limit`
+    alto e pagine. A resposta traz `messages.clientSideFilter` com quantas
+    mensagens foram varridas de fato.
+
     Args:
-        query: Termo de busca nas mensagens. Use quando o usuário pedir para
-               buscar/encontrar mensagens com palavras específicas
-        chat_id: ID do chat específico no formato WhatsApp (ex: 5511999999999@s.whatsapp.net)
-                 Raramente usado - prefira usar number com get_chat_messages()
+        query: Termo de busca nas mensagens. Filtro client-side, case-insensitive,
+               limitado à página buscada (veja o aviso acima)
+        chat_id: Número OU JID do chat (ex: 5511999999999, 5511999999999@s.whatsapp.net,
+                 100000000000000@lid, 120363000000000000@g.us). É o único jeito de ler
+                 um grupo. Um número é resolvido contra a lista de chats.
         limit: Número máximo de mensagens a retornar. SEMPRE ajuste quando
                o usuário especificar quantidade
                Padrão: 50 mensagens
+        page: Página, começando em 1. Use com limit para paginar.
 
     Returns:
         dict: Lista de mensagens encontradas
 
     Example:
-        # Buscar por termo em todas as conversas
-        messages = find_messages(query="pedido")
+        # Ler uma conversa inteira, paginando
+        messages = find_messages(chat_id="5511999999999", limit=100, page=1)
 
-        # Buscar apenas 10 mensagens com "reunião"
-        messages = find_messages(query="reunião", limit=10)
+        # Ler um grupo
+        messages = find_messages(chat_id="120363000000000000@g.us", limit=50)
 
-        # Buscar em chat específico
-        messages = find_messages(chat_id="5511999999999@s.whatsapp.net", limit=20)
+        # Buscar "reunião" nas últimas 500 mensagens de uma conversa
+        messages = find_messages(query="reunião", chat_id="5511999999999", limit=500)
     """
-    return client.find_messages(query=query, chat_id=chat_id, limit=limit)
+    return client.find_messages(query=query, chat_id=chat_id, limit=limit, page=page)
 
 
 @mcp.tool()
@@ -433,6 +458,11 @@ def get_instance_info() -> dict:
 # Entry Point
 # ============================================================================
 
+def main() -> None:
+    """Executa o servidor MCP no transporte stdio."""
+    mcp.run()
+
+
 if __name__ == "__main__":
     # Executa o servidor MCP
-    mcp.run()
+    main()

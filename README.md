@@ -240,8 +240,21 @@ Mostre informações da instância
 | Tool | Descrição | Parâmetros |
 |------|-----------|------------|
 | `list_chats` | Lista conversas ativas | `limit` |
-| `get_chat_messages` | Obtém mensagens de conversa | `number`, `limit` |
-| `find_messages` | Busca mensagens por termo | `query`, `chat_id`, `limit` |
+| `get_chat_messages` | Obtém mensagens de conversa | `number`, `limit`, `page` |
+| `find_messages` | Lê/filtra mensagens de uma conversa | `query`, `chat_id`, `limit`, `page` |
+
+`number` e `chat_id` aceitam um número no formato internacional **ou** um JID completo.
+Passar o JID é obrigatório para grupos (`...@g.us`) e é o caminho direto para conversas
+com o endereçamento novo (`...@lid`); um número puro é resolvido contra a lista de
+conversas, comparando `remoteJid` e `lastMessage.key.remoteJidAlt`.
+
+> **`query` é um filtro client-side, sobre a página buscada.** A Evolution API não
+> suporta busca de texto no servidor (ela descarta `where.message`), então o filtro só vê
+> os registros já trazidos. Um `find_messages(query=...)` **sem** `chat_id` varre apenas
+> as `limit` mensagens mais recentes da instância inteira e **não prova** que o termo
+> nunca foi dito. Para buscar numa conversa, passe `chat_id` com um `limit` alto e
+> pagine com `page`. A resposta traz `messages.clientSideFilter` com quantas mensagens
+> foram varridas de fato.
 
 ### Contatos
 

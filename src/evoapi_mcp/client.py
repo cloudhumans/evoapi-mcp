@@ -20,6 +20,8 @@ VALID_MEDIA_TYPES = {"image", "video", "document", "audio"}
 VALID_PRESENCE_STATUS = {"available", "unavailable", "composing", "recording"}
 MAX_TEXT_LENGTH = 65536  # 64KB - limite do WhatsApp
 MAX_CAPTION_LENGTH = 1024  # Limite de legenda
+PERSONAL_JID_SUFFIX = "@s.whatsapp.net"
+GROUP_JID_SUFFIX = "@g.us"
 
 
 class EvolutionAPIError(Exception):
@@ -64,6 +66,7 @@ class EvolutionClient:
 
         # Cache de nomes de contatos (número -> nome)
         self._contact_names_cache: dict[str, str | None] = {}
+        self._jid_cache: dict[str, tuple[str, datetime]] = {}
         self._cache_timestamp: datetime | None = None
         self._cache_ttl = timedelta(minutes=5)  # Cache expira após 5 minutos
 
@@ -171,7 +174,7 @@ class EvolutionClient:
         return datetime.now() - self._cache_timestamp > self._cache_ttl
 
     def clear_cache(self) -> None:
-        """Limpa o cache de nomes de contatos.
+        """Limpa o cache de nomes de contatos e o de JIDs resolvidos.
 
         Este método é útil quando você quer forçar a atualização dos nomes
         dos contatos sem precisar reiniciar o cliente.
@@ -180,6 +183,7 @@ class EvolutionClient:
             client.clear_cache()  # Cache será reconstruído na próxima chamada
         """
         self._contact_names_cache.clear()
+        self._jid_cache.clear()
         self._cache_timestamp = None
         self._log("Cache de contatos limpo")
 
@@ -287,11 +291,13 @@ class EvolutionClient:
                     # Extrai o número do remoteJid
                     remote_jid = chat["remoteJid"]
                     # Ignora grupos (terminam com @g.us)
-                    if not remote_jid.endswith("@g.us"):
-                        number = remote_jid.replace("@s.whatsapp.net", "")
+                    if not remote_jid.endswith(GROUP_JID_SUFFIX):
+                        clean_number = (
+                            self._personal_jid_number(remote_jid)
+                            or self._chat_alt_number(chat)
+                        )
                         # Lookup local (muito mais rápido que HTTP)
-                        clean_number = re.sub(r'\D', '', number)
-                        if clean_number in contacts_map:
+                        if clean_number and clean_number in contacts_map:
                             chat["pushName"] = contacts_map[clean_number]
                             chat["_enriched"] = True
 
@@ -322,11 +328,10 @@ class EvolutionClient:
                 # Extrai número do remoteJid (formato: 5511999999999@s.whatsapp.net)
                 remote_jid = contact.get("remoteJid", "")
                 # Ignora grupos (terminam com @g.us)
-                if remote_jid.endswith("@g.us"):
+                if remote_jid.endswith(GROUP_JID_SUFFIX):
                     continue
 
-                number = remote_jid.replace("@s.whatsapp.net", "")
-                clean_number = re.sub(r'\D', '', number)
+                clean_number = self._personal_jid_number(remote_jid)
 
                 # Pega o pushName
                 name = contact.get("pushName")
@@ -348,49 +353,241 @@ class EvolutionClient:
         self,
         query: str | None = None,
         chat_id: str | None = None,
-        limit: int = 50
+        limit: int = 50,
+        page: int = 1
     ) -> dict[str, Any]:
         """Busca mensagens de uma conversa.
 
         Endpoint: POST /chat/findMessages/{instanceId}
 
+        O filtro de conversa precisa ir aninhado em `where.key.remoteJid`; uma
+        chave solta no topo do corpo é descartada pela API, que aí devolve
+        todas as mensagens de todas as conversas. O tamanho de página vai
+        como `offset`, não como `limit`.
+
         Args:
-            query: Termo de busca nas mensagens (opcional)
-            chat_id: ID do chat específico (ex: 5511999999999@s.whatsapp.net)
-            limit: Número máximo de mensagens a retornar
+            query: Filtro de texto, case-insensitive. Aplicado no cliente e
+                apenas sobre os registros da página buscada, porque a API
+                descarta `where.message`. Use um limit alto pra varrer mais.
+            chat_id: Número ou JID da conversa. Resolvido por resolve_chat_jid,
+                então conversas `@lid` e `@g.us` também funcionam.
+            limit: Tamanho da página (vai pra API como `offset`)
+            page: Número da página, começando em 1
 
         Returns:
-            dict: Lista de mensagens
+            dict: Lista de mensagens. Quando query é usado, `messages` também
+                traz um relatório `clientSideFilter` do que foi varrido.
 
         Raises:
             EvolutionAPIError: Se houver erro na requisição
         """
-        self._log(f"Buscando mensagens (limit={limit})")
+        self._log(f"Buscando mensagens (limit={limit}, page={page})")
 
-        payload = {}
-        if query:
-            payload["query"] = query
+        payload: dict[str, Any] = {}
         if chat_id:
-            payload["chatId"] = chat_id
+            payload["where"] = {"key": {"remoteJid": self.resolve_chat_jid(chat_id)}}
         if limit:
-            payload["limit"] = limit
+            payload["offset"] = limit
+        if page and page > 1:
+            payload["page"] = page
 
-        return self._make_request(
+        result = self._make_request(
             "POST",
             "/chat/findMessages/{instanceId}",
             data=payload
         )
 
+        if query:
+            return self._apply_text_filter(result, query)
+
+        return result
+
+    def _apply_text_filter(self, result: Any, query: str) -> Any:
+        """Filtra uma resposta de findMessages por texto, no cliente.
+
+        A Evolution API descarta `where.message` em silêncio, então busca de
+        texto não pode ser empurrada pro servidor: o filtro só vê os registros
+        da página atual. O relatório `clientSideFilter` deixa esse escopo
+        explícito, em vez de deixar um resultado vazio parecer que nada foi
+        dito.
+
+        Args:
+            result: Resposta bruta do findMessages
+            query: Trecho de texto a procurar, case-insensitive
+
+        Returns:
+            A mesma resposta, com `records` reduzido aos que casaram.
+        """
+        block = result.get("messages") if isinstance(result, dict) else None
+        if not isinstance(block, dict) or not isinstance(block.get("records"), list):
+            return result
+
+        records = block["records"]
+        needle = query.casefold()
+        matched = [
+            record for record in records
+            if needle in self._message_text(record).casefold()
+        ]
+
+        block["records"] = matched
+        block["clientSideFilter"] = {
+            "query": query,
+            "scope": "current_page",
+            "scanned": len(records),
+            "matched": len(matched),
+        }
+
+        return result
+
+    @staticmethod
+    def _message_text(record: dict[str, Any]) -> str:
+        """Extrai o texto legível de um registro de mensagem.
+
+        Args:
+            record: Um item de `messages.records`
+
+        Returns:
+            str: O texto ou a legenda, vazio quando a mensagem não tem nenhum
+                dos dois.
+        """
+        message = record.get("message") or {}
+
+        return (
+            message.get("conversation")
+            or (message.get("extendedTextMessage") or {}).get("text")
+            or (message.get("imageMessage") or {}).get("caption")
+            or (message.get("videoMessage") or {}).get("caption")
+            or (message.get("documentMessage") or {}).get("caption")
+            or ""
+        )
+
+    def resolve_chat_jid(self, identifier: str) -> str:
+        """Resolve um número ou JID pro JID em que a conversa está de fato salva.
+
+        O WhatsApp endereça muita conversa como `<opaco>@lid` em vez de
+        `<numero>@s.whatsapp.net`, então o JID não pode ser montado a partir do
+        número: o telefone só aparece em `lastMessage.key.remoteJidAlt`.
+        Qualquer coisa que já contenha '@' é repassada intacta, e é isso que
+        faz grupo e JID explícito funcionarem.
+
+        Só resolução bem-sucedida entra no cache, e cada entrada expira com o
+        mesmo TTL do cache de contatos: o WhatsApp está migrando conversa de
+        `@s.whatsapp.net` pra `@lid`, então um JID cacheado pra sempre voltaria
+        a devolver conversa vazia depois da migração. O fallback nunca é
+        cacheado, pra que uma conversa que apareça depois ainda seja
+        encontrada.
+
+        Args:
+            identifier: Número no formato internacional, ou um JID completo
+
+        Returns:
+            str: O JID resolvido, caindo pra `<numero>@s.whatsapp.net` quando a
+                lista de conversas não tem nenhuma correspondência.
+
+        Raises:
+            InvalidPhoneNumberError: Se o identificador não for JID nem número válido
+        """
+        if "@" in identifier:
+            return identifier
+
+        clean_number = self.validate_phone_number(identifier)
+        cached = self._jid_cache.get(clean_number)
+        if cached and datetime.now() - cached[1] <= self._cache_ttl:
+            return cached[0]
+
+        fallback = f"{clean_number}{PERSONAL_JID_SUFFIX}"
+
+        try:
+            chats = self.find_chats(enrich_with_names=False)
+        except EvolutionAPIError:
+            self._log(
+                f"Falha ao listar conversas pra resolver {clean_number}; usando {fallback}",
+                "WARNING"
+            )
+            return fallback
+
+        for chat in chats if isinstance(chats, list) else []:
+            remote_jid = chat.get("remoteJid") or ""
+            if not remote_jid:
+                continue
+            if remote_jid == fallback or self._chat_alt_number(chat) == clean_number:
+                self._jid_cache[clean_number] = (remote_jid, datetime.now())
+                return remote_jid
+
+        self._log(
+            f"Nenhuma conversa encontrada para {clean_number}; usando {fallback}",
+            "WARNING"
+        )
+
+        return fallback
+
+    def resolve_send_target(self, number: str) -> str:
+        """Normaliza um destino de envio sem inventar um JID.
+
+        Número puro é validado e normalizado. JID é repassado intacto: remover
+        os não-dígitos de `100000000000000@lid` daria uma string de 15 dígitos
+        que passa na validação de telefone e endereça outro destinatário,
+        possivelmente real.
+
+        Args:
+            number: Número no formato internacional, ou um JID completo
+
+        Returns:
+            str: O destino a entregar pra API
+
+        Raises:
+            InvalidPhoneNumberError: Se o número for inválido
+        """
+        if "@" in number:
+            return number
+
+        return self.validate_phone_number(number)
+
+    @staticmethod
+    def _personal_jid_number(remote_jid: str) -> str:
+        """Extrai o número de telefone de um JID de contato.
+
+        Args:
+            remote_jid: Um JID como `5511999999999@s.whatsapp.net`
+
+        Returns:
+            str: Os dígitos, ou vazio para JID de grupo e `@lid`, cuja parte
+                local é um id opaco e não um número de telefone.
+        """
+        if not remote_jid.endswith(PERSONAL_JID_SUFFIX):
+            return ""
+
+        return re.sub(r'\D', '', remote_jid[:-len(PERSONAL_JID_SUFFIX)])
+
+    @staticmethod
+    def _chat_alt_number(chat: dict[str, Any]) -> str:
+        """Extrai o número de telefone pro qual uma conversa `@lid` aponta.
+
+        Args:
+            chat: Um item da resposta do findChats
+
+        Returns:
+            str: Os dígitos de `lastMessage.key.remoteJidAlt`, ou vazio quando
+                a API não expõe esse campo.
+        """
+        key = (chat.get("lastMessage") or {}).get("key") or {}
+        alt = key.get("remoteJidAlt") or ""
+
+        return alt.split("@")[0]
+
     def get_messages_by_number(
         self,
         number: str,
-        limit: int = 50
+        limit: int = 50,
+        page: int = 1
     ) -> dict[str, Any]:
         """Obtém mensagens de uma conversa por número.
 
         Args:
-            number: Número de telefone
+            number: Número no formato internacional, ou um JID completo
+                (grupos e contatos `@lid` inclusos)
             limit: Número máximo de mensagens
+            page: Número da página, começando em 1
 
         Returns:
             dict: Mensagens da conversa
@@ -399,10 +596,7 @@ class EvolutionClient:
             InvalidPhoneNumberError: Se o número for inválido
             EvolutionAPIError: Se houver erro
         """
-        clean_number = self.validate_phone_number(number)
-        chat_id = f"{clean_number}@s.whatsapp.net"
-
-        return self.find_messages(chat_id=chat_id, limit=limit)
+        return self.find_messages(chat_id=number, limit=limit, page=page)
 
     def fetch_contacts(self, contact_id: str | None = None) -> list[dict[str, Any]]:
         """Busca contatos salvos no WhatsApp com filtros opcionais.
@@ -463,13 +657,16 @@ class EvolutionClient:
             EvolutionAPIError: Se houver erro
         """
         try:
-            clean_number = self.validate_phone_number(number)
+            if "@" in number:
+                cache_key = number
+                contact_id = number
+            else:
+                cache_key = self.validate_phone_number(number)
+                contact_id = f"{cache_key}{PERSONAL_JID_SUFFIX}"
 
             # Verifica cache primeiro (se não expirou)
-            if use_cache and not self._is_cache_expired() and clean_number in self._contact_names_cache:
-                return self._contact_names_cache[clean_number]
-
-            contact_id = f"{clean_number}@s.whatsapp.net"
+            if use_cache and not self._is_cache_expired() and cache_key in self._contact_names_cache:
+                return self._contact_names_cache[cache_key]
 
             # Tenta buscar contato específico com filtro (retorna lista direta)
             contact_list = self.fetch_contacts(contact_id=contact_id)
@@ -482,7 +679,7 @@ class EvolutionClient:
 
             # Salva no cache e atualiza timestamp
             if use_cache:
-                self._contact_names_cache[clean_number] = name
+                self._contact_names_cache[cache_key] = name
                 if not self._cache_timestamp:
                     self._cache_timestamp = datetime.now()
 
@@ -520,13 +717,13 @@ class EvolutionClient:
             EvolutionAPIError: Erros da API
         """
         # Validações
-        clean_number = self.validate_phone_number(number)
+        target = self.resolve_send_target(number)
         self.validate_text_length(text, MAX_TEXT_LENGTH, "text")
 
-        self._log(f"Enviando mensagem de texto para {clean_number}")
+        self._log(f"Enviando mensagem de texto para {target}")
 
         payload = {
-            "number": clean_number,
+            "number": target,
             "text": text,
             "linkPreview": link_preview
         }
@@ -565,16 +762,16 @@ class EvolutionClient:
             EvolutionAPIError: Erros da API
         """
         # Validações
-        clean_number = self.validate_phone_number(number)
+        target = self.resolve_send_target(number)
         self.validate_media_type(media_type)
         self.validate_url(media_url, "media_url")
         if caption:
             self.validate_text_length(caption, MAX_CAPTION_LENGTH, "caption")
 
-        self._log(f"Enviando {media_type} para {clean_number}")
+        self._log(f"Enviando {media_type} para {target}")
 
         payload = {
-            "number": clean_number,
+            "number": target,
             "mediatype": media_type,
             "media": media_url
         }
@@ -643,8 +840,7 @@ class EvolutionClient:
         }
 
         if number:
-            clean_number = self.validate_phone_number(number)
-            payload["number"] = clean_number
+            payload["number"] = self.resolve_send_target(number)
 
         return self._make_request(
             "POST",
