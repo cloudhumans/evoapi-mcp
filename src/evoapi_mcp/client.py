@@ -354,7 +354,8 @@ class EvolutionClient:
         query: str | None = None,
         chat_id: str | None = None,
         limit: int = 50,
-        page: int = 1
+        page: int = 1,
+        max_pages: int = 1
     ) -> dict[str, Any]:
         """Busca mensagens de uma conversa.
 
@@ -373,19 +374,29 @@ class EvolutionClient:
                 então conversas `@lid` e `@g.us` também funcionam.
             limit: Tamanho da página (vai pra API como `offset`)
             page: Número da página, começando em 1
+            max_pages: Quantas páginas consecutivas varrer quando `query` é
+                usado, a partir de `page`. Só existe porque a busca é
+                client-side: 1 (padrão) mantém o comportamento de uma página, e
+                um valor maior varre mais fundo antes de dizer que não achou.
+                Ignorado sem `query`.
 
         Returns:
             dict: Lista de mensagens. Quando query é usado, `messages` também
-                traz um relatório `clientSideFilter` do que foi varrido.
+                traz um relatório `clientSideFilter` do que foi varrido. Quando
+                `chat_id` era um número que não bateu com nenhuma conversa,
+                `messages.chatResolution.resolved` vem `False`.
 
         Raises:
             EvolutionAPIError: Se houver erro na requisição
         """
         self._log(f"Buscando mensagens (limit={limit}, page={page})")
 
+        resolution: dict[str, Any] | None = None
         payload: dict[str, Any] = {}
         if chat_id:
-            payload["where"] = {"key": {"remoteJid": self.resolve_chat_jid(chat_id)}}
+            jid, resolved = self.resolve_chat_jid_detail(chat_id)
+            payload["where"] = {"key": {"remoteJid": jid}}
+            resolution = {"requested": chat_id, "jid": jid, "resolved": resolved}
         if limit:
             payload["offset"] = limit
         if page and page > 1:
@@ -398,7 +409,94 @@ class EvolutionClient:
         )
 
         if query:
-            return self._apply_text_filter(result, query)
+            result = self._apply_text_filter(result, query)
+            if max_pages > 1:
+                result = self._scan_more_pages(
+                    result, payload, query, page, max_pages
+                )
+
+        return self._annotate_chat_resolution(result, resolution)
+
+    def _scan_more_pages(
+        self,
+        result: Any,
+        payload: dict[str, Any],
+        query: str,
+        first_page: int,
+        max_pages: int
+    ) -> Any:
+        """Continua a busca client-side nas páginas seguintes.
+
+        Para na primeira página que volta vazia — sem registro nenhum não há
+        página seguinte — e acumula em `clientSideFilter` o total varrido, pra
+        que "não achei" venha com o tamanho da varredura.
+
+        Args:
+            result: Resposta da primeira página, já filtrada
+            payload: Corpo usado na primeira página (reaproveitado por página)
+            query: Trecho de texto procurado
+            first_page: Página em que a varredura começou
+            max_pages: Total de páginas a varrer, contando a primeira
+
+        Returns:
+            A resposta da primeira página com os matches das demais anexados.
+        """
+        block = result.get("messages") if isinstance(result, dict) else None
+        if not isinstance(block, dict) or not isinstance(block.get("records"), list):
+            return result
+
+        report = block.get("clientSideFilter") or {}
+        pages_scanned = 1
+
+        for offset in range(1, max_pages):
+            next_payload = dict(payload)
+            next_payload["page"] = first_page + offset
+
+            next_result = self._make_request(
+                "POST",
+                "/chat/findMessages/{instanceId}",
+                data=next_payload
+            )
+            next_block = (
+                next_result.get("messages") if isinstance(next_result, dict) else None
+            )
+            if not isinstance(next_block, dict):
+                break
+            raw_records = next_block.get("records")
+            if not isinstance(raw_records, list) or not raw_records:
+                break
+
+            pages_scanned += 1
+            self._apply_text_filter(next_result, query)
+            block["records"].extend(next_block["records"])
+            report["scanned"] = report.get("scanned", 0) + len(raw_records)
+
+        report["matched"] = len(block["records"])
+        report["pages_scanned"] = pages_scanned
+        report["scope"] = (
+            "current_page" if pages_scanned == 1 else f"{pages_scanned}_pages"
+        )
+        block["clientSideFilter"] = report
+
+        return result
+
+    @staticmethod
+    def _annotate_chat_resolution(result: Any, resolution: dict[str, Any] | None) -> Any:
+        """Anexa à resposta como o `chat_id` pedido foi resolvido.
+
+        Args:
+            result: Resposta do findMessages
+            resolution: Relatório de resolução, ou None quando não houve chat_id
+
+        Returns:
+            A mesma resposta, com `messages.chatResolution` quando aplicável.
+        """
+        if resolution is None:
+            return result
+
+        block = result.get("messages") if isinstance(result, dict) else None
+        if isinstance(block, dict):
+            block["chatResolution"] = resolution
 
         return result
 
@@ -464,6 +562,11 @@ class EvolutionClient:
     def resolve_chat_jid(self, identifier: str) -> str:
         """Resolve um número ou JID pro JID em que a conversa está de fato salva.
 
+        Wrapper de resolve_chat_jid_detail que descarta o sinal de resolução.
+        Quem devolve resultado de leitura pro chamador deve usar a versão
+        detalhada: um JID que caiu no fallback lê uma conversa que pode não
+        existir, e aí um retorno vazio não é resposta, é falta de resolução.
+
         O WhatsApp endereça muita conversa como `<opaco>@lid` em vez de
         `<numero>@s.whatsapp.net`, então o JID não pode ser montado a partir do
         número: o telefone só aparece em `lastMessage.key.remoteJidAlt`.
@@ -487,13 +590,34 @@ class EvolutionClient:
         Raises:
             InvalidPhoneNumberError: Se o identificador não for JID nem número válido
         """
+        return self.resolve_chat_jid_detail(identifier)[0]
+
+    def resolve_chat_jid_detail(self, identifier: str) -> tuple[str, bool]:
+        """Resolve um identificador de conversa e diz se a resolução deu certo.
+
+        Mesma resolução de resolve_chat_jid, mas devolvendo também se o JID veio
+        da lista de conversas ou do fallback `<numero>@s.whatsapp.net`. O
+        fallback é um palpite: a conversa pode estar salva como `@lid`, ou pode
+        não existir. Sem esse sinal, uma leitura que não encontra nada parece
+        conversa vazia — a mesma confusão que motivou a issue #9.
+
+        Args:
+            identifier: Número no formato internacional, ou um JID completo
+
+        Returns:
+            tuple[str, bool]: O JID a usar, e se ele foi resolvido de fato.
+                JID explícito conta como resolvido.
+
+        Raises:
+            InvalidPhoneNumberError: Se o identificador não for JID nem número válido
+        """
         if "@" in identifier:
-            return identifier
+            return identifier, True
 
         clean_number = self.validate_phone_number(identifier)
         cached = self._jid_cache.get(clean_number)
         if cached and datetime.now() - cached[1] <= self._cache_ttl:
-            return cached[0]
+            return cached[0], True
 
         fallback = f"{clean_number}{PERSONAL_JID_SUFFIX}"
 
@@ -504,7 +628,7 @@ class EvolutionClient:
                 f"Falha ao listar conversas pra resolver {clean_number}; usando {fallback}",
                 "WARNING"
             )
-            return fallback
+            return fallback, False
 
         for chat in chats if isinstance(chats, list) else []:
             remote_jid = chat.get("remoteJid") or ""
@@ -512,14 +636,14 @@ class EvolutionClient:
                 continue
             if remote_jid == fallback or self._chat_alt_number(chat) == clean_number:
                 self._jid_cache[clean_number] = (remote_jid, datetime.now())
-                return remote_jid
+                return remote_jid, True
 
         self._log(
             f"Nenhuma conversa encontrada para {clean_number}; usando {fallback}",
             "WARNING"
         )
 
-        return fallback
+        return fallback, False
 
     def resolve_send_target(self, number: str) -> str:
         """Normaliza um destino de envio sem inventar um JID.

@@ -7,6 +7,34 @@ e este projeto adere ao [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ---
 
+## [1.2.1] - 2026-08-27
+
+### 🔧 Corrigido
+
+- **Leitura por número diz quando não resolveu a conversa.** `resolve_chat_jid()` cai pro
+  palpite `<numero>@s.whatsapp.net` quando nenhuma conversa bate, e isso só aparecia num
+  log WARNING: pro chamador, a leitura voltava como conversa vazia. A resposta agora traz
+  `messages.chatResolution` com `{requested, jid, resolved}` — mesma classe de problema da
+  issue #9, resolvida do mesmo jeito, tornando o escopo do resultado explícito. Novo
+  `resolve_chat_jid_detail()` devolve `(jid, resolved)`; `resolve_chat_jid()` segue
+  devolvendo só a string.
+
+### ✨ Adicionado
+
+- **`max_pages` em `find_messages()`** (padrão 1, sem mudança de comportamento). Como a
+  busca de texto é client-side (issue #13), a única forma de varrer mais fundo era o
+  chamador paginar na mão e juntar os resultados. Com `max_pages`, uma chamada varre N
+  páginas consecutivas, para na primeira vazia, e o `clientSideFilter` reporta
+  `pages_scanned` junto do total varrido. Exposto também na tool MCP `find_messages`.
+
+### ✅ Verificação
+
+10 testes novos em `tests/test_message_reading.py` (36 no total); **7 deles falham no
+código anterior**. Ponta a ponta contra instância real (Evolution API v2, 581 conversas):
+número existente → `resolved: true` com o JID `@lid` correto; número inexistente →
+`resolved: false` com 0 registros; `max_pages=4` varreu 20 mensagens contra 5 de uma
+página só, com 9 matches contra 2.
+
 ## [1.2.0] - 2026-08-23
 
 ### 🐛 A Leitura de Mensagens Nunca Funcionou

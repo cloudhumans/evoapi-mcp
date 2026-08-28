@@ -241,7 +241,7 @@ Mostre informações da instância
 |------|-----------|------------|
 | `list_chats` | Lista conversas ativas | `limit` |
 | `get_chat_messages` | Obtém mensagens de conversa | `number`, `limit`, `page` |
-| `find_messages` | Lê/filtra mensagens de uma conversa | `query`, `chat_id`, `limit`, `page` |
+| `find_messages` | Lê/filtra mensagens de uma conversa | `query`, `chat_id`, `limit`, `page`, `max_pages` |
 
 `number` e `chat_id` aceitam um número no formato internacional **ou** um JID completo.
 Passar o JID é obrigatório para grupos (`...@g.us`) e é o caminho direto para conversas
@@ -253,8 +253,15 @@ conversas, comparando `remoteJid` e `lastMessage.key.remoteJidAlt`.
 > os registros já trazidos. Um `find_messages(query=...)` **sem** `chat_id` varre apenas
 > as `limit` mensagens mais recentes da instância inteira e **não prova** que o termo
 > nunca foi dito. Para buscar numa conversa, passe `chat_id` com um `limit` alto e
-> pagine com `page`. A resposta traz `messages.clientSideFilter` com quantas mensagens
-> foram varridas de fato.
+> pagine com `page` — ou use `max_pages` para varrer várias páginas numa chamada. A
+> resposta traz `messages.clientSideFilter` com quantas mensagens e páginas foram
+> varridas de fato.
+
+> **Leitura por número traz `messages.chatResolution`.** Quando o número não bate com
+> nenhuma conversa da instância, a leitura acontece num JID adivinhado
+> (`<numero>@s.whatsapp.net`) e `resolved` vem `false`. Lista vazia com
+> `resolved: false` significa "conversa não encontrada", não "conversa sem mensagens" —
+> a distinção que faltava quando o filtro era ignorado em silêncio.
 
 ### Contatos
 

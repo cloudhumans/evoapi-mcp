@@ -212,7 +212,10 @@ def get_chat_messages(
               a resposta traz `messages.pages` com o total de páginas.
 
     Returns:
-        dict: Lista de mensagens da conversa
+        dict: Lista de mensagens da conversa. Se o número não bater com nenhuma
+            conversa da instância, `messages.chatResolution.resolved` vem
+            `false` — a leitura foi num JID adivinhado, e lista vazia significa
+            "conversa não encontrada", não "conversa sem mensagens".
 
     Example:
         # Últimas 50 mensagens (padrão)
@@ -271,7 +274,8 @@ def find_messages(
     query: str | None = None,
     chat_id: str | None = None,
     limit: int = 50,
-    page: int = 1
+    page: int = 1,
+    max_pages: int = 1
 ) -> dict:
     """Busca mensagens com filtros avançados em todas as conversas.
 
@@ -285,8 +289,14 @@ def find_messages(
     foi buscada. Um `query` sem `chat_id` varre só as `limit` mensagens mais
     recentes da instância inteira e NÃO prova que o termo nunca foi dito.
     Para buscar dentro de uma conversa, passe `chat_id` junto com um `limit`
-    alto e pagine. A resposta traz `messages.clientSideFilter` com quantas
-    mensagens foram varridas de fato.
+    alto e use `max_pages` pra varrer várias páginas de uma vez. A resposta traz
+    `messages.clientSideFilter` com quantas mensagens e páginas foram varridas
+    de fato.
+
+    Quando `chat_id` é um número que não bate com nenhuma conversa da instância,
+    a resposta traz `messages.chatResolution.resolved = false`: a leitura foi
+    feita num JID adivinhado, então lista vazia ali significa "conversa não
+    encontrada", não "conversa sem mensagens".
 
     Args:
         query: Termo de busca nas mensagens. Filtro client-side, case-insensitive,
@@ -298,6 +308,9 @@ def find_messages(
                o usuário especificar quantidade
                Padrão: 50 mensagens
         page: Página, começando em 1. Use com limit para paginar.
+        max_pages: Com `query`, quantas páginas varrer a partir de `page`
+                   (padrão 1). Use um valor maior antes de concluir que um
+                   termo não aparece na conversa.
 
     Returns:
         dict: Lista de mensagens encontradas
@@ -311,8 +324,15 @@ def find_messages(
 
         # Buscar "reunião" nas últimas 500 mensagens de uma conversa
         messages = find_messages(query="reunião", chat_id="5511999999999", limit=500)
+
+        # Varrer 2000 mensagens (4 páginas de 500) antes de dizer que não achou
+        messages = find_messages(
+            query="reunião", chat_id="5511999999999", limit=500, max_pages=4
+        )
     """
-    return client.find_messages(query=query, chat_id=chat_id, limit=limit, page=page)
+    return client.find_messages(
+        query=query, chat_id=chat_id, limit=limit, page=page, max_pages=max_pages
+    )
 
 
 @mcp.tool()

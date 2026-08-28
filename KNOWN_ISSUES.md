@@ -341,10 +341,33 @@ instância real (196 mensagens no chat): buscar por um termo impossível
 instância inteira e **não prova** que o termo nunca foi dito.
 
 **Workaround Atual:**
-O filtro client-side agora devolve `messages.clientSideFilter` com
-`{query, scope, scanned, matched}`, para que um resultado vazio mostre o que foi de fato
-varrido em vez de parecer uma resposta definitiva. Para buscar dentro de uma conversa,
-passe `chat_id` com um `limit` alto e pagine.
+O filtro client-side devolve `messages.clientSideFilter` com
+`{query, scope, scanned, matched, pages_scanned}`, para que um resultado vazio mostre o
+que foi de fato varrido em vez de parecer uma resposta definitiva. Para buscar dentro de
+uma conversa, passe `chat_id` com um `limit` alto e use `max_pages` (desde 1.2.1) para
+varrer várias páginas numa chamada — a varredura para na primeira página vazia.
+
+### Issue #14: Fallback de JID Invisível pro Chamador
+
+**Status:** ✅ Resolvido em 2026-08-27
+**Prioridade:** Média
+**Arquivo:** `src/evoapi_mcp/client.py` (`resolve_chat_jid_detail`, `find_messages`)
+
+**Descrição:**
+`resolve_chat_jid()` cai pro palpite `<numero>@s.whatsapp.net` quando o número não bate
+com nenhuma conversa da lista, e sinalizava isso apenas num log `WARNING`. Pro chamador,
+a leitura voltava como uma conversa que existe e está vazia.
+
+**Impacto:**
+A mesma confusão da issue #9 em escala menor: `records: []` podia significar "conversa sem
+mensagens" ou "conversa nunca encontrada", e nada na resposta distinguia os dois. Quem
+tria conversa lê os dois como "nada aqui".
+
+**Solução:**
+`resolve_chat_jid_detail()` devolve `(jid, resolved)` e `find_messages()` anexa
+`messages.chatResolution` com `{requested, jid, resolved}`. JID explícito conta como
+resolvido; leitura sem `chat_id` não recebe o relatório. `resolve_chat_jid()` continua
+devolvendo só a string, para não quebrar chamador existente.
 
 ## 🟡 Médio
 
@@ -551,12 +574,12 @@ Docstrings bem detalhadas ajudam o LLM a escolher certo.
 
 ### Por Prioridade
 - 🔴 Crítico: 0 issues abertas (7 resolvidas)
-- 🟡 Médio: 4 issues (1 é limitação da API upstream)
+- 🟡 Médio: 4 issues abertas (1 é limitação da API upstream) + 1 resolvida
 - 🟢 Baixo: 2 issues
 
 ### Por Status
 - 🔴 Aberto: 6 issues
-- ✅ Resolvido: 7 issues
+- ✅ Resolvido: 8 issues
 
 ---
 
@@ -583,6 +606,9 @@ Adicionadas validações completas para media_type, URLs e tamanhos de texto/cap
 ### ✅ Issue #12: `@lid` Como Número em Envios (Resolvido em 2026-08-23)
 `resolve_send_target()` e `_personal_jid_number()` pararam de transformar um JID `@lid`
 em um número de telefone diferente.
+
+### ✅ Issue #14: Fallback de JID Invisível (Resolvido em 2026-08-27)
+A resposta de leitura agora traz `messages.chatResolution`.
 
 ---
 
@@ -620,4 +646,4 @@ em um número de telefone diferente.
 
 ---
 
-**Última revisão:** 2026-08-23
+**Última revisão:** 2026-08-27
