@@ -344,3 +344,132 @@ def test_clear_cache_also_clears_the_jid_cache(client, recorder):
     run(rec, read_clear_read)
 
     assert rec.count(FIND_CHATS) == 2
+
+
+def test_a_resolved_read_reports_the_resolution(client, recorder):
+    rec = recorder({FIND_CHATS: [LID_CHAT], FIND_MESSAGES: make_messages("oi")})
+
+    result = run(rec, lambda: client.find_messages(chat_id=NUMBER, limit=5))
+
+    assert result["messages"]["chatResolution"] == {
+        "requested": NUMBER,
+        "jid": LID_JID,
+        "resolved": True,
+    }
+
+
+def test_an_unresolved_read_says_so_instead_of_looking_empty(client, recorder):
+    rec = recorder({FIND_CHATS: [OTHER_CHAT], FIND_MESSAGES: make_messages()})
+
+    result = run(rec, lambda: client.find_messages(chat_id=NUMBER, limit=5))
+
+    resolution = result["messages"]["chatResolution"]
+    assert resolution == {
+        "requested": NUMBER,
+        "jid": PERSONAL_JID,
+        "resolved": False,
+    }
+    assert result["messages"]["records"] == []
+
+
+def test_an_explicit_jid_counts_as_resolved(client, recorder):
+    rec = recorder({FIND_MESSAGES: make_messages("oi", remote_jid=GROUP_JID)})
+
+    result = run(rec, lambda: client.find_messages(chat_id=GROUP_JID, limit=5))
+
+    assert result["messages"]["chatResolution"]["resolved"] is True
+    assert rec.count(FIND_CHATS) == 0
+
+
+def test_a_read_without_a_chat_has_no_resolution_report(client, recorder):
+    rec = recorder({FIND_MESSAGES: make_messages("oi")})
+
+    result = run(rec, lambda: client.find_messages(limit=5))
+
+    assert "chatResolution" not in result["messages"]
+
+
+def test_resolve_chat_jid_detail_flags_the_fallback(client, recorder):
+    rec = recorder({FIND_CHATS: [OTHER_CHAT]})
+
+    jid, resolved = run(rec, lambda: client.resolve_chat_jid_detail(NUMBER))
+
+    assert (jid, resolved) == (PERSONAL_JID, False)
+
+
+def test_resolve_chat_jid_still_returns_a_plain_string(client, recorder):
+    rec = recorder({FIND_CHATS: [LID_CHAT]})
+
+    assert run(rec, lambda: client.resolve_chat_jid(NUMBER)) == LID_JID
+
+
+def test_a_query_scans_a_single_page_by_default(client, recorder):
+    rec = recorder({FIND_MESSAGES: make_messages("nada aqui")})
+
+    result = run(rec, lambda: client.find_messages(query="planilha", chat_id=GROUP_JID))
+
+    assert rec.count(FIND_MESSAGES) == 1
+    assert result["messages"]["clientSideFilter"]["scope"] == "current_page"
+
+
+def test_max_pages_keeps_scanning_and_reports_the_whole_sweep(client, recorder):
+    pages = [
+        make_messages("nada", "aqui", remote_jid=GROUP_JID),
+        make_messages("fala da planilha", "outra coisa", remote_jid=GROUP_JID),
+        make_messages("nada", "de novo", remote_jid=GROUP_JID),
+    ]
+    rec = Recorder({})
+    rec.routes = {FIND_MESSAGES: pages[0]}
+
+    def call(**kwargs):
+        rec.calls.append(kwargs)
+        page = kwargs["json"].get("page", 1)
+        return FakeResponse(pages[page - 1])
+
+    with patch("evoapi_mcp.client.requests.request", side_effect=call):
+        result = client.find_messages(
+            query="planilha", chat_id=GROUP_JID, limit=2, max_pages=3
+        )
+
+    report = result["messages"]["clientSideFilter"]
+    assert [body.get("page", 1) for body in rec.bodies(FIND_MESSAGES)] == [1, 2, 3]
+    assert report == {
+        "query": "planilha",
+        "scope": "3_pages",
+        "scanned": 6,
+        "matched": 1,
+        "pages_scanned": 3,
+    }
+    assert [
+        record["message"]["conversation"] for record in result["messages"]["records"]
+    ] == ["fala da planilha"]
+
+
+def test_a_multi_page_scan_stops_on_the_first_empty_page(client, recorder):
+    pages = [
+        make_messages("nada", remote_jid=GROUP_JID),
+        make_messages(remote_jid=GROUP_JID),
+        make_messages("fala da planilha", remote_jid=GROUP_JID),
+    ]
+    calls = []
+
+    def call(**kwargs):
+        calls.append(kwargs)
+        return FakeResponse(pages[kwargs["json"].get("page", 1) - 1])
+
+    with patch("evoapi_mcp.client.requests.request", side_effect=call):
+        result = client.find_messages(
+            query="planilha", chat_id=GROUP_JID, limit=1, max_pages=3
+        )
+
+    assert len(calls) == 2
+    assert result["messages"]["clientSideFilter"]["pages_scanned"] == 1
+    assert result["messages"]["records"] == []
+
+
+def test_max_pages_is_ignored_without_a_query(client, recorder):
+    rec = recorder({FIND_MESSAGES: make_messages("oi", remote_jid=GROUP_JID)})
+
+    run(rec, lambda: client.find_messages(chat_id=GROUP_JID, limit=5, max_pages=4))
+
+    assert rec.count(FIND_MESSAGES) == 1
