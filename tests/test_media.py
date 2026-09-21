@@ -116,6 +116,38 @@ def test_download_media_ignores_transcript_json_sidecar(client, recorder, tmp_pa
     assert rec.count(GET_BASE64) == 1
 
 
+def test_download_media_ignores_transcript_txt_sidecar(client, recorder, tmp_path):
+    (tmp_path / "MSG1.transcript.txt").write_text("já transcrito")
+    rec = recorder({GET_BASE64: payload()})
+
+    result = run(rec, lambda: download_media(client, tmp_path, "MSG1"))
+
+    assert result["cached"] is False
+    assert rec.count(GET_BASE64) == 1
+
+
+def test_download_media_treats_txt_document_as_cached(client, recorder, tmp_path):
+    (tmp_path / "MSG1.txt").write_bytes(b"plain text document contents")
+    rec = recorder({GET_BASE64: payload()})
+
+    result = run(rec, lambda: download_media(client, tmp_path, "MSG1"))
+
+    assert result["cached"] is True
+    assert result["path"] == str(tmp_path / "MSG1.txt")
+    assert rec.count(GET_BASE64) == 0
+
+
+def test_download_media_treats_json_document_as_cached(client, recorder, tmp_path):
+    (tmp_path / "MSG1.json").write_bytes(b'{"not": "a transcript sidecar"}')
+    rec = recorder({GET_BASE64: payload()})
+
+    result = run(rec, lambda: download_media(client, tmp_path, "MSG1"))
+
+    assert result["cached"] is True
+    assert result["path"] == str(tmp_path / "MSG1.json")
+    assert rec.count(GET_BASE64) == 0
+
+
 def test_download_media_skips_api_when_cached(client, recorder, tmp_path):
     (tmp_path / "MSG1.ogg").write_bytes(AUDIO_BYTES)
     rec = recorder({GET_BASE64: payload()})

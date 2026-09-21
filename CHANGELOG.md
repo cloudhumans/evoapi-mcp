@@ -23,7 +23,7 @@ e este projeto adere ao [Semantic Versioning](https://semver.org/lang/pt-BR/).
   caminho, nunca o base64.
 - **`transcribe_audio(message_id)`** e **`transcribe_chat_audios(chat)`**: transcrição
   via OpenAI (`OPENAI_API_KEY`, mesma variável do plugin ch-shared), com cache do texto em
-  `<id>.txt`.
+  `<id>.transcript.txt`.
 
 ### 🔧 Corrigido
 

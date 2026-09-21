@@ -57,7 +57,9 @@ def _find_cached(media_dir: Path, message_id: str) -> Path | None:
     if not media_dir.exists():
         return None
     for candidate in media_dir.glob(f"{message_id}.*"):
-        if candidate.suffix in (".txt", ".tmp", ".json"):
+        if candidate.suffix == ".tmp":
+            continue
+        if candidate.suffixes[:1] == [".transcript"]:
             continue
         if candidate.stat().st_size > 0:
             return candidate

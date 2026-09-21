@@ -109,13 +109,14 @@ def test_transcribe_message_downloads_calls_openai_and_caches(client, recorder, 
     assert result["cached"] is False
     assert result["model"] == "gpt-4o-mini-transcribe"
     assert result["audioPath"] == str(tmp_path / "MSG1.ogg")
+    assert result["transcriptPath"] == str(tmp_path / "MSG1.transcript.txt")
     assert Path(result["transcriptPath"]).read_text(encoding="utf-8") == "fechado o deal"
     assert post.call_count == 1
 
 
 def test_cached_transcript_skips_openai(client, recorder, tmp_path):
     (tmp_path / "MSG1.ogg").write_bytes(AUDIO)
-    (tmp_path / "MSG1.txt").write_text("já transcrito", encoding="utf-8")
+    (tmp_path / "MSG1.transcript.txt").write_text("já transcrito", encoding="utf-8")
     (tmp_path / "MSG1.transcript.json").write_text('{"model": "gpt-4o-mini-transcribe", "language": null}', encoding="utf-8")
     rec = recorder({})
 
@@ -132,7 +133,7 @@ def test_cached_transcript_skips_openai(client, recorder, tmp_path):
 
 def test_cached_transcript_without_sidecar_reports_none(client, recorder, tmp_path):
     (tmp_path / "MSG1.ogg").write_bytes(AUDIO)
-    (tmp_path / "MSG1.txt").write_text("já transcrito, sem sidecar", encoding="utf-8")
+    (tmp_path / "MSG1.transcript.txt").write_text("já transcrito, sem sidecar", encoding="utf-8")
     rec = recorder({})
 
     with patch("evoapi_mcp.transcription.requests.post") as post:
@@ -147,7 +148,7 @@ def test_cached_transcript_without_sidecar_reports_none(client, recorder, tmp_pa
 
 def test_cached_transcript_with_different_language_retranscribes(client, recorder, tmp_path):
     (tmp_path / "MSG1.ogg").write_bytes(AUDIO)
-    (tmp_path / "MSG1.txt").write_text("versão antiga auto-detectada", encoding="utf-8")
+    (tmp_path / "MSG1.transcript.txt").write_text("versão antiga auto-detectada", encoding="utf-8")
     (tmp_path / "MSG1.transcript.json").write_text('{"model": "gpt-4o-mini-transcribe", "language": null}', encoding="utf-8")
     rec = recorder({})
     config = make_config(tmp_path)
@@ -160,7 +161,7 @@ def test_cached_transcript_with_different_language_retranscribes(client, recorde
     assert result["cached"] is False
     assert result["model"] == "gpt-4o-mini-transcribe"
     assert result["language"] == "pt"
-    assert (tmp_path / "MSG1.txt").read_text(encoding="utf-8") == "versão em pt"
+    assert (tmp_path / "MSG1.transcript.txt").read_text(encoding="utf-8") == "versão em pt"
     import json as _json
     assert _json.loads((tmp_path / "MSG1.transcript.json").read_text(encoding="utf-8")) == {
         "model": "gpt-4o-mini-transcribe", "language": "pt",

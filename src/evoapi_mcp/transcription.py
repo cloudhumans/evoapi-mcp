@@ -55,7 +55,7 @@ def transcribe_file(
 
 
 def _transcript_path(audio_path: Path) -> Path:
-    return audio_path.with_suffix(".txt")
+    return audio_path.parent / f"{audio_path.stem}.transcript.txt"
 
 
 def _transcript_meta_path(audio_path: Path) -> Path:

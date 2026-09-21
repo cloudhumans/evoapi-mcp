@@ -533,7 +533,7 @@ TRANSCRIBE_AUDIO_DESCRIPTION = """Transcreve um áudio do WhatsApp usando a API 
 Baixa o áudio (mesmo caminho de download_media) e envia pra OpenAI com o modelo em
 OPENAI_TRANSCRIBE_MODEL (padrão gpt-4o-mini-transcribe). Exige OPENAI_API_KEY no
 ambiente; sem ela, falha antes de baixar qualquer coisa. O texto fica em cache ao lado
-do áudio (<message_id>.txt), então repetir a chamada não paga de novo.
+do áudio (<message_id>.transcript.txt), então repetir a chamada não paga de novo.
 
 Args:
     message_id: key.id de uma mensagem do tipo audioMessage.
