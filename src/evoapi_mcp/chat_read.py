@@ -1,6 +1,6 @@
 from typing import Any
 
-from evoapi_mcp.client import GROUP_JID_SUFFIX, EvolutionClient
+from evoapi_mcp.client import GROUP_JID_SUFFIX, EvolutionAPIError, EvolutionClient
 from evoapi_mcp.read_markers import ReadMarkerStore
 
 REASON_GROUP = "group_receipts_unsupported"
@@ -92,3 +92,57 @@ def mark_chat_read(
         result["markerTimestamp"] = newest
 
     return result
+
+
+def _last_message_timestamp(chat: dict[str, Any]) -> int | None:
+    last = chat.get("lastMessage") or {}
+    value = last.get("messageTimestamp")
+    if value is None:
+        return None
+    return _timestamp({"messageTimestamp": value})
+
+
+def _count_unread_since(client: EvolutionClient, jid: str, marker: int, page_size: int) -> tuple[int, bool]:
+    records = _records(client.find_messages(chat_id=jid, limit=page_size))
+    count = sum(
+        1 for r in records
+        if not (r.get("key") or {}).get("fromMe") and _timestamp(r) > marker
+    )
+    return count, len(records) >= page_size
+
+
+def annotate_chats_with_markers(
+    client: EvolutionClient,
+    store: ReadMarkerStore,
+    chats: list[dict[str, Any]],
+    page_size: int = 100,
+) -> list[dict[str, Any]]:
+    for chat in chats:
+        jid = chat.get("remoteJid") or ""
+        entry = store.get_entry(jid) if jid else None
+        if not entry:
+            chat["unreadSource"] = "evolution"
+            continue
+
+        marker = int(entry["lastMessageTimestamp"])
+        chat["readMarker"] = entry
+        last_ts = _last_message_timestamp(chat)
+
+        if last_ts is not None and last_ts <= marker:
+            chat["unreadCount"] = 0
+            chat["unreadSource"] = "local_marker"
+            continue
+
+        try:
+            count, is_lower_bound = _count_unread_since(client, jid, marker, page_size)
+        except EvolutionAPIError as error:
+            client._log(f"Unread recount failed for {jid}: {error}", "WARNING")
+            chat["unreadSource"] = "evolution"
+            continue
+
+        chat["unreadCount"] = count
+        chat["unreadSource"] = "local_marker"
+        if is_lower_bound:
+            chat["unreadCountIsLowerBound"] = True
+
+    return chats

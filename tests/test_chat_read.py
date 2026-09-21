@@ -1,7 +1,8 @@
 import pytest
 
 from helpers import FIND_CHATS, FIND_MESSAGES, MARK_READ, GROUP_JID, LID_JID, NUMBER, PERSONAL_JID, LID_CHAT, run
-from evoapi_mcp.chat_read import REASON_GROUP, REASON_NOT_FOUND, REASON_NOTHING_NEW, mark_chat_read
+from evoapi_mcp.chat_read import REASON_GROUP, REASON_NOT_FOUND, REASON_NOTHING_NEW, annotate_chats_with_markers, mark_chat_read
+from evoapi_mcp.client import EvolutionAPIError
 from evoapi_mcp.read_markers import ReadMarkerStore
 
 OK = {"message": "Read messages", "read": "success"}
@@ -123,3 +124,82 @@ def test_empty_chat_uses_no_marker(client, store, recorder):
     assert result["markerTimestamp"] is None
     assert store.get(LID_JID) is None
     assert result["messagesScanned"] == 0
+
+
+def chat(jid, unread, last_ts, last_from_me=False):
+    return {
+        "remoteJid": jid,
+        "unreadCount": unread,
+        "lastMessage": {"key": {"remoteJid": jid, "fromMe": last_from_me}, "messageTimestamp": last_ts},
+    }
+
+
+def test_chat_without_marker_keeps_evolution_count(client, store, recorder):
+    rec = recorder({})
+    chats = [chat(LID_JID, 7, 100)]
+
+    out = run(rec, lambda: annotate_chats_with_markers(client, store, chats))
+
+    assert out[0]["unreadCount"] == 7
+    assert out[0]["unreadSource"] == "evolution"
+    assert "readMarker" not in out[0]
+    assert rec.count(FIND_MESSAGES) == 0
+
+
+def test_marker_up_to_date_zeroes_count_without_http(client, store, recorder):
+    store.set(LID_JID, 100)
+    rec = recorder({})
+
+    out = run(rec, lambda: annotate_chats_with_markers(client, store, [chat(LID_JID, 7, 100)]))
+
+    assert out[0]["unreadCount"] == 0
+    assert out[0]["unreadSource"] == "local_marker"
+    assert out[0]["readMarker"]["lastMessageTimestamp"] == 100
+    assert rec.count(FIND_MESSAGES) == 0
+
+
+def test_newer_messages_are_counted_after_marker(client, store, recorder):
+    store.set(LID_JID, 100)
+    rec = recorder({FIND_MESSAGES: page(record("a", 90), record("b", 110), record("mine", 120, from_me=True), record("c", 130))})
+
+    out = run(rec, lambda: annotate_chats_with_markers(client, store, [chat(LID_JID, 999, 130)]))
+
+    assert out[0]["unreadCount"] == 2
+    assert out[0]["unreadSource"] == "local_marker"
+    assert "unreadCountIsLowerBound" not in out[0]
+    assert rec.bodies(FIND_MESSAGES)[0]["offset"] == 100
+
+
+def test_full_page_marks_count_as_lower_bound(client, store, recorder):
+    store.set(LID_JID, 0)
+    records = [record(str(i), i + 1) for i in range(3)]
+    rec = recorder({FIND_MESSAGES: page(*records)})
+
+    out = run(rec, lambda: annotate_chats_with_markers(client, store, [chat(LID_JID, 50, 3)], page_size=3))
+
+    assert out[0]["unreadCount"] == 3
+    assert out[0]["unreadCountIsLowerBound"] is True
+
+
+def test_http_failure_falls_back_to_evolution_count(client, store, recorder, monkeypatch):
+    store.set(LID_JID, 100)
+
+    def boom(**kwargs):
+        raise EvolutionAPIError("down")
+
+    monkeypatch.setattr(client, "find_messages", lambda **kw: boom())
+
+    out = annotate_chats_with_markers(client, store, [chat(LID_JID, 7, 130)])
+
+    assert out[0]["unreadCount"] == 7
+    assert out[0]["unreadSource"] == "evolution"
+
+
+def test_chat_without_last_message_timestamp_recounts(client, store, recorder):
+    store.set(LID_JID, 100)
+    rec = recorder({FIND_MESSAGES: page(record("b", 110))})
+    chats = [{"remoteJid": LID_JID, "unreadCount": 4}]
+
+    out = run(rec, lambda: annotate_chats_with_markers(client, store, chats))
+
+    assert out[0]["unreadCount"] == 1
