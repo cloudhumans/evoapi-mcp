@@ -485,10 +485,6 @@ def get_instance_info() -> dict:
     return client.get_instance_info()
 
 
-# ============================================================================
-# TOOLS - Leitura, Mídia e Transcrição
-# ============================================================================
-
 MARK_AS_READ_DESCRIPTION = """Marca uma ou várias conversas do WhatsApp como lidas.
 
 NUNCA chame esta ferramenta por iniciativa própria, dentro de uma skill automática ou
