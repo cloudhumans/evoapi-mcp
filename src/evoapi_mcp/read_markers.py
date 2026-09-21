@@ -26,7 +26,24 @@ def _merge_entry(a: dict | None, b: dict | None) -> dict:
 class ReadMarkerStore:
     def __init__(self, state_dir: Path, instance_name: str) -> None:
         self.path = Path(state_dir).expanduser() / f"{instance_name}.read-markers.json"
-        self._chats: dict[str, dict] = self._load()
+        self._chats: dict[str, dict] = {}
+        self._loaded_stat: tuple[int, int] | None = None
+        self._reload()
+
+    def _stat(self) -> tuple[int, int] | None:
+        try:
+            stat = self.path.stat()
+        except OSError:
+            return None
+        return (stat.st_mtime_ns, stat.st_size)
+
+    def _reload(self) -> None:
+        self._chats = self._load()
+        self._loaded_stat = self._stat()
+
+    def _refresh(self) -> None:
+        if self._stat() != self._loaded_stat:
+            self._reload()
 
     def _load(self) -> dict[str, dict]:
         if not self.path.exists():
@@ -52,10 +69,12 @@ class ReadMarkerStore:
         os.replace(tmp_path, self.path)
 
     def get(self, jid: str) -> int | None:
+        self._refresh()
         entry = self._chats.get(jid)
         return entry.get("lastMessageTimestamp") if entry else None
 
     def get_entry(self, jid: str) -> dict | None:
+        self._refresh()
         entry = self._chats.get(jid)
         return dict(entry) if entry else None
 
@@ -74,7 +93,9 @@ class ReadMarkerStore:
         self._chats = merged
 
         self._save()
+        self._loaded_stat = self._stat()
         return dict(self._chats[jid])
 
     def all(self) -> dict[str, dict]:
+        self._refresh()
         return {jid: dict(entry) for jid, entry in self._chats.items()}

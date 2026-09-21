@@ -147,6 +147,45 @@ def test_set_with_equal_timestamp_unions_ids_across_stores(tmp_path):
     assert sorted(entry["lastMessageIds"]) == ["a", "b"]
 
 
+def test_second_store_sees_write_from_first_after_construction(tmp_path):
+    store_a = ReadMarkerStore(tmp_path, "inst")
+    store_b = ReadMarkerStore(tmp_path, "inst")
+
+    store_a.set(JID, 42)
+
+    assert store_b.get(JID) == 42
+    assert store_b.get_entry(JID)["lastMessageTimestamp"] == 42
+
+
+def test_get_does_not_reparse_when_file_unchanged(tmp_path, monkeypatch):
+    store = ReadMarkerStore(tmp_path, "inst")
+    store.set(JID, 1)
+
+    calls = []
+    original_loads = json.loads
+
+    def spy(*args, **kwargs):
+        calls.append(1)
+        return original_loads(*args, **kwargs)
+
+    monkeypatch.setattr("evoapi_mcp.read_markers.json.loads", spy)
+
+    assert store.get(JID) == 1
+    assert store.get(JID) == 1
+    assert store.get_entry(JID)["lastMessageTimestamp"] == 1
+    assert calls == []
+
+
+def test_deleting_file_mid_life_degrades_to_empty(tmp_path):
+    store = ReadMarkerStore(tmp_path, "inst")
+    store.set(JID, 1)
+
+    store.path.unlink()
+
+    assert store.get(JID) is None
+    assert store.all() == {}
+
+
 def test_malformed_entry_drops_non_dict_values(tmp_path):
     (tmp_path / "inst.read-markers.json").write_text(json.dumps({
         "version": 1,
