@@ -112,6 +112,21 @@ EVOLUTION_INSTANCE_NAME=your-instance-name
 EVOLUTION_TIMEOUT=30
 ```
 
+Além dessas, quatro variáveis opcionais suportam as tools de leitura, mídia e
+transcrição:
+
+- `EVOLUTION_STATE_DIR` — onde ficam os marcadores de leitura gravados por `mark_as_read`
+  (padrão `~/.local/state/evoapi-mcp`).
+- `EVOLUTION_MEDIA_DIR` — onde `download_media` e `transcribe_audio` salvam os arquivos
+  baixados (padrão `~/Downloads/whatsapp-media`).
+- `OPENAI_API_KEY` — só é lida por `transcribe_audio` e `transcribe_chat_audios`. Se você
+  já usa o plugin `ch-shared` do Claude Code, é a **mesma** chave do bloco `env` do
+  `~/.claude/settings.json`: o processo do MCP é filho da sessão do Claude Code e herda
+  esse ambiente, então normalmente você não precisa redefinir nada aqui. Só configure em
+  `.env` se for rodar o MCP fora do Claude Code.
+- `OPENAI_TRANSCRIBE_MODEL` — modelo de transcrição da OpenAI (padrão
+  `gpt-4o-mini-transcribe`).
+
 **Exemplo real:**
 ```bash
 EVOLUTION_BASE_URL=https://pevo.ntropy.com.br
@@ -243,6 +258,11 @@ Mostre informações da instância
 | `get_chat_messages` | Obtém mensagens de conversa | `number`, `limit`, `page` |
 | `find_messages` | Lê/filtra mensagens de uma conversa | `query`, `chat_id`, `limit`, `page`, `max_pages` |
 
+> **`list_chats` devolve `unreadSource`/`readMarker`.** `unreadSource` é `"evolution"`
+> (contador bruto da Evolution, que nunca decrementa) ou `"local_marker"` (recalculado a
+> partir do marcador gravado por `mark_as_read`); quando há marcador, o chat também traz
+> `readMarker` com o timestamp usado no cálculo.
+
 `number` e `chat_id` aceitam um número no formato internacional **ou** um JID completo.
 Passar o JID é obrigatório para grupos (`...@g.us`) e é o caminho direto para conversas
 com o endereçamento novo (`...@lid`); um número puro é resolvido contra a lista de
@@ -278,6 +298,26 @@ conversas, comparando `remoteJid` e `lastMessage.key.remoteJidAlt`.
 | `get_connection_status` | Verifica status da conexão | - |
 | `get_instance_info` | Informações da instância | - |
 | `set_presence` | Define status de presença | `status`, `number` |
+
+### Leitura, Mídia e Transcrição
+
+| Tool | Descrição | Parâmetros |
+|------|-----------|------------|
+| `mark_as_read` | Marca uma ou várias conversas como lidas | `chats` |
+| `download_media` | Baixa a mídia de uma mensagem (imagem, documento, áudio, vídeo, sticker) e salva em disco | `message_id` |
+| `transcribe_audio` | Transcreve um áudio do WhatsApp via OpenAI, com cache do texto | `message_id`, `language` |
+| `transcribe_chat_audios` | Transcreve todos os áudios de uma página de mensagens de uma conversa | `chat`, `limit`, `page`, `language` |
+
+> **`mark_as_read` nunca deve ser chamada por iniciativa própria.** Só sob comando
+> explícito do usuário — o "não lido" é a memória de trabalho das pessoas, e zerar sem
+> pedido apaga essa memória. Em conversa 1:1 o receipt limpa a marca de não lido no
+> celular; em grupo, a Evolution API 2.3.7 perde o `participant` da chave e só o
+> marcador local é gravado (`phoneCleared: false`). Veja a seção "⚠️ Limitações da
+> Evolution API (v2.3.7) e próximos passos" abaixo para os detalhes verificados.
+>
+> `download_media` e `transcribe_audio`/`transcribe_chat_audios` sempre devolvem um
+> **caminho** de arquivo, nunca o conteúdo em base64 — respostas grandes seriam
+> truncadas. `transcribe_audio`/`transcribe_chat_audios` exigem `OPENAI_API_KEY`.
 
 ---
 
@@ -352,6 +392,32 @@ cd evoapi-mcp
 uv run evoapi-mcp
 # Depois teste chamando tools via stdin
 ```
+
+---
+
+## ⚠️ Limitações da Evolution API (v2.3.7) e próximos passos
+
+Verificado no código-fonte da tag 2.3.7 e contra instância real em 2026-09-20:
+
+- **`markMessageAsRead` descarta chaves `@lid` em silêncio** e ainda responde `success`.
+  Cerca de 70% das conversas individuais são `@lid`. O MCP contorna mandando a chave com o
+  telefone (`remoteJidAlt`), que passa e limpa a marca de não lido no celular.
+- **Grupo não pode ser marcado como lido pela API.** A Evolution joga fora o `participant`
+  da chave antes de chamar o Baileys, e receipt de grupo sem participant é ignorado pelo
+  WhatsApp. `mark_as_read` grava só o marcador local nesses casos (`phoneCleared: false`).
+  O que destravaria isso é um endpoint `markChatRead` na Evolution espelhando o
+  `markChatUnread` (`chatModify({markRead: true})`, que propaga pro celular). PR upstream
+  bem-vindo.
+- **O `unreadCount` da Evolution nunca decrementa via API.** Ele conta mensagens recebidas
+  com status `DELIVERY_ACK` e só muda por eventos que a nossa leitura não gera. Por isso
+  `list_chats` passa a calcular a partir do marcador local quando existe
+  (`unreadSource: "local_marker"`).
+
+Próximos passos possíveis, não implementados:
+
+- **Arquivar**: `POST /chat/archiveChat/{instance}` existe (`{"lastMessage": {...},
+  "archive": true}`), via `chatModify`, então deve propagar pro celular.
+- **Silenciar**: não há endpoint de mute na 2.3.7.
 
 ---
 

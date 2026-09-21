@@ -2,7 +2,7 @@
 
 Problemas conhecidos, limitações e workarounds.
 
-**Última atualização:** 2026-08-23
+**Última atualização:** 2026-09-20
 
 ---
 
@@ -369,6 +369,96 @@ tria conversa lê os dois como "nada aqui".
 resolvido; leitura sem `chat_id` não recebe o relatório. `resolve_chat_jid()` continua
 devolvendo só a string, para não quebrar chamador existente.
 
+---
+
+### Issue #15: `markMessageAsRead` Descarta Chaves `@lid` em Silêncio
+
+**Status:** 🟢 Aberto (limitação da Evolution API, não do MCP)
+**Prioridade:** Alta
+**Arquivo:** `src/evoapi_mcp/chat_read.py` (`mark_chat_read`, `receipt_key`)
+
+**Descrição:**
+`POST /chat/markMessageAsRead/{instanceId}` filtra as chaves recebidas antes de repassar
+pro Baileys: só aceita `isJidGroup || isPnUser`, e `@lid` não é nenhum dos dois. A chamada
+ainda responde `201 success`, então nada no retorno indica que a chave foi descartada.
+Verificado contra a tag 2.3.7 e uma instância real: mandar a chave com `remoteJid: @lid`
+devolve `success` e o badge de não lido continua no celular; mandar o mesmo receipt com o
+telefone de `remoteJidAlt` no lugar do `remoteJid` limpa a marca. Cerca de 70% das
+conversas individuais da instância de teste são `@lid`.
+
+**Impacto:**
+Sem o contorno, `mark_as_read` responderia sucesso sem nunca limpar o celular na maioria
+das conversas individuais — a mesma classe de falha silenciosa das issues #9/#10.
+
+**Solução Aplicada:**
+`chat_read.receipt_key()` monta a chave do receipt com `remoteJidAlt` quando presente,
+caindo pro `remoteJid` original nos demais casos.
+
+**Workaround Atual:**
+Nenhum necessário — o contorno já está em produção. Não há como detectar, sem essa troca,
+que a Evolution está descartando a chave, já que o `success` é idêntico nos dois casos.
+
+---
+
+### Issue #16: Grupo Não Pode Ser Marcado Como Lido Pela API
+
+**Status:** 🟢 Aberto (limitação da Evolution API, não do MCP)
+**Prioridade:** Média
+**Arquivo:** `src/evoapi_mcp/chat_read.py` (`mark_chat_read`)
+
+**Descrição:**
+A Evolution descarta o campo `participant` da chave antes de repassar o receipt pro
+Baileys/WhatsApp, e um receipt de grupo sem `participant` é ignorado pelo WhatsApp — o
+badge de não lido no celular não muda. Verificado contra um grupo real: 121 receipts
+mandados com `key.participant` preenchido devolveram `201 success` e o contador de não
+lidas no celular permaneceu o mesmo.
+
+**Impacto:**
+`mark_as_read` num grupo não tem como limpar a marca no celular — qualquer implementação
+cliente esbarraria no mesmo limite.
+
+**Solução Aplicada:**
+`mark_chat_read()` detecta `jid.endswith(GROUP_JID_SUFFIX)` e não manda receipt nesse
+caso; grava só o marcador local, com `phoneCleared: False` e
+`reason: "group_receipts_unsupported"` na resposta, pra deixar claro que o celular não foi
+tocado.
+
+**Workaround Atual:**
+Nenhum no MCP. O que destravaria isso do lado da Evolution é um endpoint `markChatRead`
+espelhando o `markChatUnread` já existente (`chatModify({"markRead": true})`, que
+demonstravelmente propaga pro celular) — PR upstream bem-vindo.
+
+---
+
+### Issue #17: `unreadCount` da Evolution Nunca Decrementa via API
+
+**Status:** 🟢 Aberto (limitação da Evolution API, não do MCP)
+**Prioridade:** Média
+**Arquivo:** `src/evoapi_mcp/chat_read.py` (`annotate_chats_with_markers`), `src/evoapi_mcp/read_markers.py`
+
+**Descrição:**
+`unreadCount` em `GET /chat/findChats` é `Chat.unreadMessages` no Postgres da Evolution:
+uma contagem de mensagens recebidas ainda em status `DELIVERY_ACK`. Nada no fluxo normal
+de leitura decrementa esse campo — o endpoint `chats.update` da Evolution ignora esse
+campo quando mandado. Numa instância real, uma conversa lida ativamente pelo celular
+chegou a acumular `unreadCount: 3084`.
+
+**Impacto:**
+`list_chats` não pode confiar no `unreadCount` bruto pra dizer o que está de fato não
+lido — o número só cresce, mesmo depois que a pessoa leu a conversa no celular.
+
+**Solução Aplicada:**
+`annotate_chats_with_markers()` recalcula `unreadCount` a partir do marcador local
+(`ReadMarkerStore`) quando ele existe pra aquele chat: conta as mensagens recebidas com
+timestamp maior que o marcador, e marca `unreadSource: "local_marker"`. Sem marcador, o
+chat mantém o `unreadCount` bruto da Evolution com `unreadSource: "evolution"`.
+
+**Workaround Atual:**
+O marcador só existe depois da primeira chamada de `mark_as_read` naquele chat; até lá,
+`list_chats` continua devolvendo o contador bruto da Evolution, que pode estar inflado.
+
+---
+
 ## 🟡 Médio
 
 ### Issue #4: Type Hints Muito Genéricos
@@ -573,12 +663,12 @@ Docstrings bem detalhadas ajudam o LLM a escolher certo.
 ## 📊 Estatísticas
 
 ### Por Prioridade
-- 🔴 Crítico: 0 issues abertas (7 resolvidas)
-- 🟡 Médio: 4 issues abertas (1 é limitação da API upstream) + 1 resolvida
+- 🔴 Crítico: 1 issue aberta (limitação da API upstream) + 7 resolvidas
+- 🟡 Médio: 6 issues abertas (3 são limitação da API upstream) + 1 resolvida
 - 🟢 Baixo: 2 issues
 
 ### Por Status
-- 🔴 Aberto: 6 issues
+- 🔴 Aberto: 9 issues
 - ✅ Resolvido: 8 issues
 
 ---
@@ -646,4 +736,4 @@ A resposta de leitura agora traz `messages.chatResolution`.
 
 ---
 
-**Última revisão:** 2026-08-27
+**Última revisão:** 2026-09-20
