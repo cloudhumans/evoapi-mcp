@@ -270,12 +270,13 @@ def list_chats(limit: int | None = None) -> list:
         chats = list_chats(limit=10)
     """
     chats = client.find_chats()
-    if isinstance(chats, list):
-        chats = annotate_chats_with_markers(client, read_markers, chats)
 
     # Aplica limit se fornecido
     if limit is not None and isinstance(chats, list):
         chats = chats[:limit]
+
+    if isinstance(chats, list):
+        chats = annotate_chats_with_markers(client, read_markers, chats)
 
     return chats
 
@@ -501,6 +502,8 @@ O que a ferramenta faz por conversa:
 - Em GRUPO não manda receipt (a Evolution API perde o participant da chave e o WhatsApp
   ignora o receipt). Só o marcador é gravado; phoneCleared vem False com
   reason = "group_receipts_unsupported".
+- Quando não havia nada novo pra marcar, nenhum receipt é mandado e phoneCleared vem
+  None (nem True nem False: não houve o que limpar), com reason = "nothing_new".
 
 Args:
     chats: Número internacional sem '+' (ex: 5511999999999), JID completo
@@ -508,8 +511,9 @@ Args:
 
 Returns:
     Uma entrada por chat pedido, na mesma ordem: requested, jid, resolved, receiptsSent,
-    phoneCleared, reason, markerTimestamp, messagesScanned. Falha em um chat vira
-    "error" nessa entrada e não interrompe os demais.
+    phoneCleared, reason, markerTimestamp, messagesScanned. phoneCleared é True (receipt
+    mandado), False (grupo) ou None (nada novo pra marcar). Falha em um chat vira "error"
+    nessa entrada e não interrompe os demais.
 """
 
 DOWNLOAD_MEDIA_DESCRIPTION = """Baixa a mídia (imagem, documento, áudio, vídeo, sticker) de uma mensagem e salva em disco.
@@ -539,22 +543,28 @@ Returns:
     text, model, language, audioPath, transcriptPath, cached, messageId.
 """
 
-TRANSCRIBE_CHAT_AUDIOS_DESCRIPTION = """Transcreve todos os áudios de uma página de mensagens de uma conversa.
+TRANSCRIBE_CHAT_AUDIOS_DESCRIPTION = """Transcreve os áudios de uma página de mensagens de uma conversa.
 
-Use quando o usuário pedir "o que dizem os áudios que fulano mandou" ou quando uma
-triagem encontrar audioMessage numa conversa relevante. Busca `limit` mensagens da
-página `page` (mesma paginação de find_messages), filtra os áudios e transcreve cada um.
-Falha em um áudio vira "error" naquele item; os outros seguem. Exige OPENAI_API_KEY.
+Use quando o usuário pedir "o que dizem os áudios que fulano mandou" ou algo equivalente
+sobre os áudios de uma conversa específica. Cada áudio é enviado pra OpenAI e cobrado; o
+padrão é transcrever no máximo 10 áudios por chamada (max_audios) e pular os seus
+próprios áudios (include_own=False), porque transcrever o que você mesmo mandou custa
+dinheiro à toa. Busca `limit` mensagens da página `page` (mesma paginação de
+find_messages), filtra os áudios e transcreve cada um até o limite. Falha em um áudio
+vira "error" naquele item; os outros seguem. Exige OPENAI_API_KEY.
 
 Args:
     chat: Número, ou JID completo (grupos e contatos @lid).
     limit: Tamanho da página de mensagens a varrer (padrão 50).
     page: Página, começando em 1.
     language: Código ISO-639-1 opcional.
+    max_audios: Quantos áudios transcrever no máximo nesta chamada (padrão 10).
+    include_own: Se True, também transcreve áudios enviados por você (padrão False).
 
 Returns:
-    chatResolution, scanned, pages, currentPage e audios: lista com messageId,
-    timestamp, fromMe, pushName, seconds e text (ou error).
+    chatResolution, scanned, pages, currentPage, audios: lista com messageId,
+    timestamp, fromMe, pushName, seconds e text (ou error), skipped_own (áudios seus
+    pulados) e skipped_over_cap (áudios além de max_audios, não transcritos).
 """
 
 
@@ -585,9 +595,14 @@ def transcribe_chat_audios(
     chat: str,
     limit: int = 50,
     page: int = 1,
-    language: str | None = None
+    language: str | None = None,
+    max_audios: int = 10,
+    include_own: bool = False
 ) -> dict:
-    return transcribe_chat_audios_in_page(client, config, chat, limit=limit, page=page, language=language)
+    return transcribe_chat_audios_in_page(
+        client, config, chat, limit=limit, page=page, language=language,
+        max_audios=max_audios, include_own=include_own,
+    )
 
 
 # ============================================================================

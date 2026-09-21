@@ -24,6 +24,7 @@ Este servidor permite que o Claude Desktop interaja com o WhatsApp através da [
 - ✅ Buscar mensagens por texto
 - ✅ Obter mensagens de conversa específica
 - ✅ Enriquecimento automático com nomes de contatos
+- ✅ Marcar conversas como lidas, baixar mídia e transcrever áudio (ver seção de Tools)
 
 ### 👥 Gerenciamento de Contatos
 - ✅ Listar contatos salvos
@@ -34,7 +35,8 @@ Este servidor permite que o Claude Desktop interaja com o WhatsApp através da [
 ### ⚡ Performance
 - ✅ Bulk fetch de contatos (1 request vs N+1)
 - ✅ Cache em memória para nomes
-- ✅ Enriquecimento automático de chats
+- ✅ Enriquecimento automático de chats (com marcador de leitura ativo, cada conversa
+  marcada e com mensagem mais nova soma 1 request extra de recount)
 
 ### 🛡️ Qualidade
 - ✅ Validação de números de telefone

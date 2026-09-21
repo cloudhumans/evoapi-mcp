@@ -54,7 +54,7 @@ def test_mark_as_read_accepts_single_string(server, monkeypatch):
     assert server.mark_as_read("5511999999999") == [{"requested": "5511999999999"}]
 
 
-def test_list_chats_is_annotated_before_limit(server, monkeypatch):
+def test_list_chats_applies_limit_before_annotating(server, monkeypatch):
     chats = [{"remoteJid": "a@lid", "unreadCount": 3}, {"remoteJid": "b@lid", "unreadCount": 4}]
     monkeypatch.setattr(server.client, "find_chats", lambda **kw: chats)
     seen = {}
@@ -69,7 +69,7 @@ def test_list_chats_is_annotated_before_limit(server, monkeypatch):
 
     out = server.list_chats(limit=1)
 
-    assert seen["count"] == 2
+    assert seen["count"] == 1
     assert out == [{"remoteJid": "a@lid", "unreadCount": 3, "unreadSource": "evolution"}]
 
 
@@ -89,7 +89,16 @@ def test_download_media_uses_configured_dir(server, monkeypatch, tmp_path):
 
 def test_transcribe_tools_delegate(server, monkeypatch):
     monkeypatch.setattr(server, "transcribe_message", lambda client, config, message_id, language=None: {"text": f"{message_id}:{language}"})
-    monkeypatch.setattr(server, "transcribe_chat_audios_in_page", lambda client, config, chat, limit=50, page=1, language=None: {"chat": chat, "limit": limit, "page": page})
+
+    def fake_chat_audios(client, config, chat, limit=50, page=1, language=None, max_audios=10, include_own=False):
+        return {"chat": chat, "limit": limit, "page": page, "max_audios": max_audios, "include_own": include_own}
+
+    monkeypatch.setattr(server, "transcribe_chat_audios_in_page", fake_chat_audios)
 
     assert server.transcribe_audio("M", language="pt") == {"text": "M:pt"}
-    assert server.transcribe_chat_audios("c", limit=5, page=2) == {"chat": "c", "limit": 5, "page": 2}
+    assert server.transcribe_chat_audios("c", limit=5, page=2) == {
+        "chat": "c", "limit": 5, "page": 2, "max_audios": 10, "include_own": False,
+    }
+    assert server.transcribe_chat_audios("c", max_audios=3, include_own=True) == {
+        "chat": "c", "limit": 50, "page": 1, "max_audios": 3, "include_own": True,
+    }

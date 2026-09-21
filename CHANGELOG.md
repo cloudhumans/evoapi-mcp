@@ -27,7 +27,9 @@ e este projeto adere ao [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ### 🔧 Corrigido
 
-- Nada em comportamento existente; `list_chats` sem marcador é idêntico ao anterior.
+- `list_chats` sem marcador continua com o mesmo `unreadCount`/`unreadSource` de antes,
+  mas toda resposta agora ganha a chave `unreadSource`, que não existia — mudança de
+  formato, mesmo pra quem nunca chamou `mark_as_read`.
 
 ### 📝 Verificado
 
