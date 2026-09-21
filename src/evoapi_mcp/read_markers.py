@@ -17,8 +17,13 @@ class ReadMarkerStore:
             return {}
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                print(f"[WARNING] Read markers: ignoring unreadable {self.path}: not an object", file=sys.stderr)
+                return {}
             chats = data.get("chats", {})
-            return chats if isinstance(chats, dict) else {}
+            if not isinstance(chats, dict):
+                return {}
+            return {jid: entry for jid, entry in chats.items() if isinstance(entry, dict)}
         except (ValueError, OSError) as error:
             print(f"[WARNING] Read markers: ignoring unreadable {self.path}: {error}", file=sys.stderr)
             return {}

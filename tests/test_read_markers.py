@@ -44,7 +44,7 @@ def test_corrupted_file_starts_empty(tmp_path):
     assert json.loads((tmp_path / "inst.read-markers.json").read_text())["chats"][JID]["lastMessageTimestamp"] == 5
 
 
-def test_write_is_atomic_and_leaves_no_tmp(tmp_path):
+def test_write_leaves_no_tmp_file_and_persists_all_entries(tmp_path):
     store = ReadMarkerStore(tmp_path, "inst")
     store.set(JID, 1)
     store.set("x@g.us", 2)
@@ -62,3 +62,42 @@ def test_creates_state_dir_on_first_write(tmp_path):
     store.set(JID, 1)
 
     assert store.path.exists()
+
+
+def test_top_level_non_object_json_degrades_gracefully(tmp_path):
+    (tmp_path / "inst.read-markers.json").write_text("[1, 2, 3]")
+
+    store = ReadMarkerStore(tmp_path, "inst")
+
+    assert store.get(JID) is None
+    assert store.all() == {}
+    store.set(JID, 5)
+    assert ReadMarkerStore(tmp_path, "inst").get(JID) == 5
+
+
+def test_top_level_null_json_degrades_gracefully(tmp_path):
+    (tmp_path / "inst.read-markers.json").write_text('"a string"')
+
+    store = ReadMarkerStore(tmp_path, "inst")
+
+    assert store.get(JID) is None
+    assert store.all() == {}
+    store.set(JID, 5)
+    assert ReadMarkerStore(tmp_path, "inst").get(JID) == 5
+
+
+def test_malformed_entry_drops_non_dict_values(tmp_path):
+    (tmp_path / "inst.read-markers.json").write_text(json.dumps({
+        "version": 1,
+        "chats": {
+            "good@lid": {"lastMessageTimestamp": 5, "markedAt": "2026-09-21T14:30:45+00:00"},
+            "bad@lid": "not-a-dict"
+        }
+    }))
+
+    store = ReadMarkerStore(tmp_path, "inst")
+
+    assert store.get("good@lid") == 5
+    assert store.get("bad@lid") is None
+    assert "good@lid" in store.all()
+    assert "bad@lid" not in store.all()
