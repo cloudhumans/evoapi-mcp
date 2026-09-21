@@ -11,6 +11,11 @@ if str(src_dir) not in sys.path:
 from mcp.server.fastmcp import FastMCP
 from evoapi_mcp.config import load_config
 from evoapi_mcp.client import EvolutionClient
+from evoapi_mcp.chat_read import annotate_chats_with_markers, mark_chat_read
+from evoapi_mcp.media import download_media as download_media_to_disk
+from evoapi_mcp.read_markers import ReadMarkerStore
+from evoapi_mcp.transcription import transcribe_chat_audios as transcribe_chat_audios_in_page
+from evoapi_mcp.transcription import transcribe_message
 
 # Inicializa o MCP server
 mcp = FastMCP("Evolution API")
@@ -19,6 +24,7 @@ mcp = FastMCP("Evolution API")
 try:
     config = load_config()
     client = EvolutionClient(config)
+    read_markers = ReadMarkerStore(config.state_dir, config.instance_name)
 except Exception as e:
     print(f"Falha ao inicializar o servidor: {e}", file=sys.stderr)
     sys.exit(1)
@@ -252,6 +258,9 @@ def list_chats(limit: int | None = None) -> list:
               - pushName: Nome do contato (ou null)
               - lastMessage: Última mensagem trocada
               - unreadCount: Número de mensagens não lidas
+              - unreadSource: "evolution" (contador bruto da Evolution, que nunca decrementa)
+                ou "local_marker" (calculado a partir do marcador gravado por mark_as_read)
+              - readMarker / unreadCountIsLowerBound: presentes só quando há marcador
 
     Example:
         # Listar todas as conversas
@@ -261,6 +270,8 @@ def list_chats(limit: int | None = None) -> list:
         chats = list_chats(limit=10)
     """
     chats = client.find_chats()
+    if isinstance(chats, list):
+        chats = annotate_chats_with_markers(client, read_markers, chats)
 
     # Aplica limit se fornecido
     if limit is not None and isinstance(chats, list):
@@ -472,6 +483,115 @@ def get_instance_info() -> dict:
         print(f"Status: {info['status']}")
     """
     return client.get_instance_info()
+
+
+# ============================================================================
+# TOOLS - Leitura, Mídia e Transcrição
+# ============================================================================
+
+MARK_AS_READ_DESCRIPTION = """Marca uma ou várias conversas do WhatsApp como lidas.
+
+NUNCA chame esta ferramenta por iniciativa própria, dentro de uma skill automática ou
+como efeito colateral de uma triagem. Só sob comando explícito do usuário ("marca X
+como lido", "limpa as não lidas de A, B e C"). O "não lido" é a memória de trabalho
+das pessoas; zerar sem pedido apaga essa memória.
+
+O que a ferramenta faz por conversa:
+- Manda read receipts das mensagens recebidas ainda não marcadas. Em conversa 1:1 isso
+  limpa a marca de não lido no celular (contatos @lid usam o telefone em remoteJidAlt,
+  porque a Evolution API descarta chaves @lid em silêncio).
+- Grava um marcador de leitura local; a partir dele list_chats passa a calcular
+  unreadCount (unreadSource = "local_marker").
+- Em GRUPO não manda receipt (a Evolution API perde o participant da chave e o WhatsApp
+  ignora o receipt). Só o marcador é gravado; phoneCleared vem False com
+  reason = "group_receipts_unsupported".
+
+Args:
+    chats: Número internacional sem '+' (ex: 5511999999999), JID completo
+        (ex: 120363000000000000@g.us, 100000000000000@lid) ou lista misturando os dois.
+
+Returns:
+    Uma entrada por chat pedido, na mesma ordem: requested, jid, resolved, receiptsSent,
+    phoneCleared, reason, markerTimestamp, messagesScanned. Falha em um chat vira
+    "error" nessa entrada e não interrompe os demais.
+"""
+
+DOWNLOAD_MEDIA_DESCRIPTION = """Baixa a mídia (imagem, documento, áudio, vídeo, sticker) de uma mensagem e salva em disco.
+
+message_id é o key.id de um registro devolvido por get_chat_messages ou find_messages.
+A Evolution API descriptografa a mídia internamente; a ferramenta grava o arquivo em
+EVOLUTION_MEDIA_DIR (padrão ~/Downloads/whatsapp-media) como <message_id>.<ext> e devolve
+o CAMINHO, nunca o conteúdo em base64 (respostas grandes seriam truncadas). Se o arquivo
+já existe, não baixa de novo (cached = True).
+
+Returns:
+    path, mediaType, mimetype, fileName, caption, sizeBytes, cached.
+"""
+
+TRANSCRIBE_AUDIO_DESCRIPTION = """Transcreve um áudio do WhatsApp usando a API de transcrição da OpenAI.
+
+Baixa o áudio (mesmo caminho de download_media) e envia pra OpenAI com o modelo em
+OPENAI_TRANSCRIBE_MODEL (padrão gpt-4o-mini-transcribe). Exige OPENAI_API_KEY no
+ambiente; sem ela, falha antes de baixar qualquer coisa. O texto fica em cache ao lado
+do áudio (<message_id>.txt), então repetir a chamada não paga de novo.
+
+Args:
+    message_id: key.id de uma mensagem do tipo audioMessage.
+    language: Código ISO-639-1 (ex: "pt") pra guiar o modelo. Opcional.
+
+Returns:
+    text, model, language, audioPath, transcriptPath, cached, messageId.
+"""
+
+TRANSCRIBE_CHAT_AUDIOS_DESCRIPTION = """Transcreve todos os áudios de uma página de mensagens de uma conversa.
+
+Use quando o usuário pedir "o que dizem os áudios que fulano mandou" ou quando uma
+triagem encontrar audioMessage numa conversa relevante. Busca `limit` mensagens da
+página `page` (mesma paginação de find_messages), filtra os áudios e transcreve cada um.
+Falha em um áudio vira "error" naquele item; os outros seguem. Exige OPENAI_API_KEY.
+
+Args:
+    chat: Número, ou JID completo (grupos e contatos @lid).
+    limit: Tamanho da página de mensagens a varrer (padrão 50).
+    page: Página, começando em 1.
+    language: Código ISO-639-1 opcional.
+
+Returns:
+    chatResolution, scanned, pages, currentPage e audios: lista com messageId,
+    timestamp, fromMe, pushName, seconds e text (ou error).
+"""
+
+
+@mcp.tool(description=MARK_AS_READ_DESCRIPTION)
+def mark_as_read(chats: list[str] | str) -> list[dict]:
+    requested = [chats] if isinstance(chats, str) else list(chats)
+    results: list[dict] = []
+    for chat in requested:
+        try:
+            results.append(mark_chat_read(client, read_markers, chat))
+        except Exception as error:
+            results.append({"requested": chat, "error": str(error)})
+    return results
+
+
+@mcp.tool(description=DOWNLOAD_MEDIA_DESCRIPTION)
+def download_media(message_id: str) -> dict:
+    return download_media_to_disk(client, config.media_dir, message_id)
+
+
+@mcp.tool(description=TRANSCRIBE_AUDIO_DESCRIPTION)
+def transcribe_audio(message_id: str, language: str | None = None) -> dict:
+    return transcribe_message(client, config, message_id, language)
+
+
+@mcp.tool(description=TRANSCRIBE_CHAT_AUDIOS_DESCRIPTION)
+def transcribe_chat_audios(
+    chat: str,
+    limit: int = 50,
+    page: int = 1,
+    language: str | None = None
+) -> dict:
+    return transcribe_chat_audios_in_page(client, config, chat, limit=limit, page=page, language=language)
 
 
 # ============================================================================
