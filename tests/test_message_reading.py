@@ -1,104 +1,17 @@
 """Regressões da leitura de mensagens, com a camada HTTP mockada."""
 
-import sys
-from datetime import datetime, timedelta
-from pathlib import Path
 from unittest.mock import patch
+from datetime import datetime, timedelta
 
 import pytest
 
-SRC_DIR = Path(__file__).resolve().parents[1] / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
-
+from helpers import (
+    FIND_CHATS, FIND_CONTACTS, FIND_MESSAGES, SEND_TEXT,
+    GROUP_JID, LID_JID, NUMBER, PERSONAL_JID,
+    LID_CHAT, OTHER_CHAT, make_messages, run,
+    FakeResponse, Recorder,
+)
 from evoapi_mcp.client import EvolutionClient, InvalidPhoneNumberError
-from evoapi_mcp.config import EvolutionConfig
-
-NUMBER = "5511999999999"
-PERSONAL_JID = f"{NUMBER}@s.whatsapp.net"
-LID_JID = "100000000000000@lid"
-GROUP_JID = "120363000000000000@g.us"
-
-FIND_MESSAGES = "/chat/findMessages/"
-FIND_CHATS = "/chat/findChats/"
-FIND_CONTACTS = "/chat/findContacts/"
-SEND_TEXT = "/message/sendText/"
-
-
-class FakeResponse:
-    def __init__(self, payload):
-        self._payload = payload
-
-    def raise_for_status(self):
-        return None
-
-    def json(self):
-        return self._payload
-
-
-class Recorder:
-    def __init__(self, routes):
-        self.routes = routes
-        self.calls = []
-
-    def __call__(self, **kwargs):
-        self.calls.append(kwargs)
-        for fragment, payload in self.routes.items():
-            if fragment in kwargs["url"]:
-                return FakeResponse(payload)
-        raise AssertionError(f"URL inesperada: {kwargs['url']}")
-
-    def bodies(self, fragment):
-        return [call["json"] for call in self.calls if fragment in call["url"]]
-
-    def count(self, fragment):
-        return len(self.bodies(fragment))
-
-
-def make_messages(*texts, remote_jid=LID_JID, total=None):
-    records = [
-        {"key": {"remoteJid": remote_jid, "fromMe": False}, "message": {"conversation": text}}
-        for text in texts
-    ]
-    return {
-        "messages": {
-            "total": total if total is not None else len(records),
-            "pages": 1,
-            "currentPage": 1,
-            "records": records,
-        }
-    }
-
-
-LID_CHAT = {
-    "remoteJid": LID_JID,
-    "pushName": None,
-    "lastMessage": {"key": {"remoteJid": LID_JID, "remoteJidAlt": PERSONAL_JID}},
-}
-OTHER_CHAT = {"remoteJid": "5500000000000@s.whatsapp.net", "pushName": "Outra Pessoa"}
-
-
-@pytest.fixture
-def client():
-    config = EvolutionConfig(
-        base_url="http://evolution.test",
-        api_token="test-token",
-        instance_name="test-instance",
-    )
-    return EvolutionClient(config)
-
-
-@pytest.fixture
-def recorder():
-    def build(routes):
-        return Recorder(routes)
-
-    return build
-
-
-def run(recorder_obj, call):
-    with patch("evoapi_mcp.client.requests.request", side_effect=recorder_obj):
-        return call()
 
 
 def test_find_messages_nests_the_chat_filter_under_where(client, recorder):
