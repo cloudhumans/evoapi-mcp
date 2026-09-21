@@ -62,6 +62,16 @@ def test_save_media_reuses_existing_file(tmp_path):
     assert (tmp_path / "MSG1.ogg").read_bytes() == b"already here"
 
 
+def test_save_media_reuses_existing_file_under_different_mimetype(tmp_path):
+    (tmp_path / "MSG1.ogg").write_bytes(AUDIO_BYTES)
+
+    result = save_media(payload(mimetype="image/jpeg"), tmp_path, "MSG1")
+
+    assert result["cached"] is True
+    assert result["path"] == str(tmp_path / "MSG1.ogg")
+    assert not (tmp_path / "MSG1.jpg").exists()
+
+
 def test_save_media_without_base64_raises(tmp_path):
     with pytest.raises(EvolutionAPIError):
         save_media({"mediaType": "conversation"}, tmp_path, "MSG1")

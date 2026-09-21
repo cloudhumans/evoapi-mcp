@@ -29,16 +29,6 @@ def extension_for(mimetype: str | None) -> str:
     return mimetypes.guess_extension(base) or ".bin"
 
 
-def _size_bytes(payload: dict[str, Any], fallback: int) -> int:
-    size = (payload.get("size") or {}).get("fileLength")
-    if isinstance(size, dict):
-        size = size.get("low")
-    try:
-        return int(size) if size is not None else fallback
-    except (TypeError, ValueError):
-        return fallback
-
-
 def _result(path: Path, payload: dict[str, Any], cached: bool) -> dict[str, Any]:
     return {
         "path": str(path),
@@ -68,10 +58,11 @@ def save_media(payload: dict[str, Any], media_dir: Path, message_id: str) -> dic
         )
 
     media_dir = Path(media_dir).expanduser()
-    path = media_dir / f"{message_id}{extension_for(payload.get('mimetype'))}"
-    if path.exists() and path.stat().st_size > 0:
-        return _result(path, payload, cached=True)
+    cached = _find_cached(media_dir, message_id)
+    if cached:
+        return _result(cached, payload, cached=True)
 
+    path = media_dir / f"{message_id}{extension_for(payload.get('mimetype'))}"
     media_dir.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_bytes(base64.b64decode(encoded))
