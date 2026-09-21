@@ -170,8 +170,9 @@ Retorno por chat:
  "markerTimestamp": 1789732047, "messagesScanned": 7}
 ```
 
-`resolved: false` (número sem conversa) grava marcador mesmo assim e devolve
-`receiptsSent: 0`, `phoneCleared: false`, `reason: "chat_not_found"`.
+`resolved: false` (número sem conversa) não envia receipt nem grava marcador, porque o
+JID é um palpite; devolve `receiptsSent: 0`, `phoneCleared: false`,
+`reason: "chat_not_found"`, `markerTimestamp: null`.
 
 `annotate_chats_with_markers(client, store, chats: list[dict], page_size: int = 100) ->
 list[dict]`: pra cada chat da lista do `findChats`:
