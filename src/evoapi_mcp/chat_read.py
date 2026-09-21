@@ -1,0 +1,94 @@
+from typing import Any
+
+from evoapi_mcp.client import GROUP_JID_SUFFIX, EvolutionClient
+from evoapi_mcp.read_markers import ReadMarkerStore
+
+REASON_GROUP = "group_receipts_unsupported"
+REASON_NOT_FOUND = "chat_not_found"
+REASON_NOTHING_NEW = "nothing_new"
+
+
+def receipt_key(key: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "remoteJid": key.get("remoteJidAlt") or key["remoteJid"],
+        "fromMe": bool(key.get("fromMe")),
+        "id": key["id"],
+    }
+
+
+def _records(result: Any) -> list[dict[str, Any]]:
+    block = result.get("messages") if isinstance(result, dict) else None
+    records = block.get("records") if isinstance(block, dict) else None
+    return records if isinstance(records, list) else []
+
+
+def _timestamp(record: dict[str, Any]) -> int:
+    value = record.get("messageTimestamp")
+    if isinstance(value, dict):
+        value = value.get("low")
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _pending_keys(records: list[dict[str, Any]], marker_before: int | None) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    pending: list[dict[str, Any]] = []
+    for record in records:
+        key = record.get("key") or {}
+        message_id = key.get("id")
+        if not message_id or key.get("fromMe") or message_id in seen:
+            continue
+        if marker_before is not None and _timestamp(record) <= marker_before:
+            continue
+        seen.add(message_id)
+        pending.append(receipt_key(key))
+    return pending
+
+
+def mark_chat_read(
+    client: EvolutionClient,
+    store: ReadMarkerStore,
+    chat: str,
+    page_size: int = 100,
+) -> dict[str, Any]:
+    jid, resolved = client.resolve_chat_jid_detail(chat)
+    result: dict[str, Any] = {
+        "requested": chat,
+        "jid": jid,
+        "resolved": resolved,
+        "receiptsSent": 0,
+        "phoneCleared": False,
+        "reason": None,
+        "markerTimestamp": None,
+        "messagesScanned": 0,
+    }
+
+    records = _records(client.find_messages(chat_id=jid, limit=page_size))
+    result["messagesScanned"] = len(records)
+
+    if not resolved:
+        result["reason"] = REASON_NOT_FOUND
+        return result
+
+    marker_before = store.get(jid)
+    pending = _pending_keys(records, marker_before)
+    is_group = jid.endswith(GROUP_JID_SUFFIX)
+
+    if is_group:
+        result["reason"] = REASON_GROUP
+    elif pending:
+        client.mark_messages_read(pending)
+        result["receiptsSent"] = len(pending)
+        result["phoneCleared"] = True
+    else:
+        result["reason"] = REASON_NOTHING_NEW
+        result["phoneCleared"] = True
+
+    newest = max((_timestamp(r) for r in records), default=0)
+    if newest:
+        store.set(jid, newest)
+        result["markerTimestamp"] = newest
+
+    return result
