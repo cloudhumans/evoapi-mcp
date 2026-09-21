@@ -4,12 +4,13 @@ from unittest.mock import patch
 
 import pytest
 
-from helpers import GET_BASE64, run
+from helpers import FIND_MESSAGES, GET_BASE64, LID_JID, run
 from evoapi_mcp.config import EvolutionConfig
 from evoapi_mcp.transcription import (
     MISSING_KEY_MESSAGE,
     OPENAI_TRANSCRIPTIONS_URL,
     TranscriptionError,
+    transcribe_chat_audios,
     transcribe_file,
     transcribe_message,
 )
@@ -124,3 +125,55 @@ def test_cached_transcript_skips_openai(client, recorder, tmp_path):
     assert result["cached"] is True
     post.assert_not_called()
     assert rec.count(GET_BASE64) == 0
+
+
+def audio_record(msg_id, ts, seconds=5, from_me=False):
+    return {
+        "key": {"id": msg_id, "fromMe": from_me, "remoteJid": LID_JID},
+        "messageTimestamp": ts,
+        "pushName": "Boaz",
+        "messageType": "audioMessage",
+        "message": {"audioMessage": {"seconds": seconds, "mimetype": "audio/ogg; codecs=opus"}},
+    }
+
+
+def text_record(msg_id, ts):
+    return {"key": {"id": msg_id, "fromMe": False, "remoteJid": LID_JID}, "messageTimestamp": ts,
+            "messageType": "conversation", "message": {"conversation": "oi"}}
+
+
+def find_result(*records):
+    return {"messages": {"total": len(records), "pages": 2, "currentPage": 1, "records": list(records),
+                         "chatResolution": {"requested": LID_JID, "jid": LID_JID, "resolved": True}}}
+
+
+def test_transcribes_only_audio_records_and_isolates_failures(client, recorder, tmp_path):
+    rec = recorder({FIND_MESSAGES: find_result(text_record("T1", 1), audio_record("A1", 2), audio_record("A2", 3, seconds=9)),
+                    GET_BASE64: audio_payload()})
+    config = make_config(tmp_path)
+    responses = iter([OpenAIResponse(200, {"text": "primeiro"}), OpenAIResponse(500, {"error": "boom"})])
+
+    with patch("evoapi_mcp.transcription.requests.post", side_effect=lambda *a, **k: next(responses)):
+        result = run(rec, lambda: transcribe_chat_audios(client, config, LID_JID, limit=10, page=1, language="pt"))
+
+    assert result["scanned"] == 3
+    assert result["pages"] == 2
+    assert result["chatResolution"]["resolved"] is True
+    assert [a["messageId"] for a in result["audios"]] == ["A1", "A2"]
+    assert result["audios"][0]["text"] == "primeiro"
+    assert result["audios"][0]["seconds"] == 5
+    assert result["audios"][0]["pushName"] == "Boaz"
+    assert result["audios"][0]["fromMe"] is False
+    assert "500" in result["audios"][1]["error"]
+    assert "text" not in result["audios"][1]
+    body = rec.bodies(FIND_MESSAGES)[0]
+    assert body["offset"] == 10
+
+
+def test_chat_audios_fails_fast_without_key(client, recorder, tmp_path):
+    rec = recorder({FIND_MESSAGES: find_result(audio_record("A1", 2))})
+
+    with pytest.raises(TranscriptionError):
+        run(rec, lambda: transcribe_chat_audios(client, make_config(tmp_path, key=None), LID_JID))
+
+    assert rec.count(FIND_MESSAGES) == 0

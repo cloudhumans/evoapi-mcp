@@ -99,3 +99,54 @@ def transcribe_message(
     result["text"] = text
     result["cached"] = False
     return result
+
+
+def _audio_seconds(record: dict[str, Any]) -> int | None:
+    audio = (record.get("message") or {}).get("audioMessage") or {}
+    seconds = audio.get("seconds")
+    return int(seconds) if isinstance(seconds, (int, float)) else None
+
+
+def transcribe_chat_audios(
+    client: EvolutionClient,
+    config: EvolutionConfig,
+    chat: str,
+    limit: int = 50,
+    page: int = 1,
+    language: str | None = None,
+) -> dict[str, Any]:
+    if not config.openai_api_key:
+        raise TranscriptionError(MISSING_KEY_MESSAGE)
+
+    found = client.find_messages(chat_id=chat, limit=limit, page=page)
+    block = found.get("messages") if isinstance(found, dict) else {}
+    records = block.get("records") if isinstance(block, dict) else []
+    records = records if isinstance(records, list) else []
+
+    audios: list[dict[str, Any]] = []
+    for record in records:
+        if record.get("messageType") != "audioMessage":
+            continue
+        key = record.get("key") or {}
+        item: dict[str, Any] = {
+            "messageId": key.get("id"),
+            "timestamp": record.get("messageTimestamp"),
+            "fromMe": bool(key.get("fromMe")),
+            "pushName": record.get("pushName"),
+            "seconds": _audio_seconds(record),
+        }
+        try:
+            transcribed = transcribe_message(client, config, key["id"], language)
+            item["text"] = transcribed["text"]
+            item["cached"] = transcribed["cached"]
+        except Exception as error:
+            item["error"] = str(error)
+        audios.append(item)
+
+    return {
+        "chatResolution": block.get("chatResolution") if isinstance(block, dict) else None,
+        "scanned": len(records),
+        "pages": block.get("pages") if isinstance(block, dict) else None,
+        "currentPage": block.get("currentPage") if isinstance(block, dict) else page,
+        "audios": audios,
+    }
