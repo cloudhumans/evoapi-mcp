@@ -116,6 +116,7 @@ def test_transcribe_message_downloads_calls_openai_and_caches(client, recorder, 
 def test_cached_transcript_skips_openai(client, recorder, tmp_path):
     (tmp_path / "MSG1.ogg").write_bytes(AUDIO)
     (tmp_path / "MSG1.txt").write_text("já transcrito", encoding="utf-8")
+    (tmp_path / "MSG1.transcript.json").write_text('{"model": "gpt-4o-mini-transcribe", "language": null}', encoding="utf-8")
     rec = recorder({})
 
     with patch("evoapi_mcp.transcription.requests.post") as post:
@@ -123,8 +124,71 @@ def test_cached_transcript_skips_openai(client, recorder, tmp_path):
 
     assert result["text"] == "já transcrito"
     assert result["cached"] is True
+    assert result["model"] == "gpt-4o-mini-transcribe"
+    assert result["language"] is None
     post.assert_not_called()
     assert rec.count(GET_BASE64) == 0
+
+
+def test_cached_transcript_without_sidecar_reports_none(client, recorder, tmp_path):
+    (tmp_path / "MSG1.ogg").write_bytes(AUDIO)
+    (tmp_path / "MSG1.txt").write_text("já transcrito, sem sidecar", encoding="utf-8")
+    rec = recorder({})
+
+    with patch("evoapi_mcp.transcription.requests.post") as post:
+        result = run(rec, lambda: transcribe_message(client, make_config(tmp_path), "MSG1", language="pt"))
+
+    assert result["text"] == "já transcrito, sem sidecar"
+    assert result["cached"] is True
+    assert result["model"] is None
+    assert result["language"] is None
+    post.assert_not_called()
+
+
+def test_cached_transcript_with_different_language_retranscribes(client, recorder, tmp_path):
+    (tmp_path / "MSG1.ogg").write_bytes(AUDIO)
+    (tmp_path / "MSG1.txt").write_text("versão antiga auto-detectada", encoding="utf-8")
+    (tmp_path / "MSG1.transcript.json").write_text('{"model": "gpt-4o-mini-transcribe", "language": null}', encoding="utf-8")
+    rec = recorder({})
+    config = make_config(tmp_path)
+
+    with patch("evoapi_mcp.transcription.requests.post", return_value=OpenAIResponse(200, {"text": "versão em pt"})) as post:
+        result = run(rec, lambda: transcribe_message(client, config, "MSG1", language="pt"))
+
+    assert post.call_count == 1
+    assert result["text"] == "versão em pt"
+    assert result["cached"] is False
+    assert result["model"] == "gpt-4o-mini-transcribe"
+    assert result["language"] == "pt"
+    assert (tmp_path / "MSG1.txt").read_text(encoding="utf-8") == "versão em pt"
+    import json as _json
+    assert _json.loads((tmp_path / "MSG1.transcript.json").read_text(encoding="utf-8")) == {
+        "model": "gpt-4o-mini-transcribe", "language": "pt",
+    }
+
+
+def test_cached_media_with_video_extension_refuses_without_openai_call(client, recorder, tmp_path):
+    (tmp_path / "MSG1.mp4").write_bytes(b"fake-mp4-bytes")
+    rec = recorder({})
+
+    with patch("evoapi_mcp.transcription.requests.post") as post:
+        with pytest.raises(TranscriptionError) as exc:
+            run(rec, lambda: transcribe_message(client, make_config(tmp_path), "MSG1"))
+
+    post.assert_not_called()
+    assert "MSG1" in str(exc.value)
+
+
+def test_cached_media_with_audio_extension_still_transcribes(client, recorder, tmp_path):
+    (tmp_path / "MSG1.ogg").write_bytes(AUDIO)
+    rec = recorder({})
+    config = make_config(tmp_path)
+
+    with patch("evoapi_mcp.transcription.requests.post", return_value=OpenAIResponse(200, {"text": "ok"})) as post:
+        result = run(rec, lambda: transcribe_message(client, config, "MSG1"))
+
+    assert post.call_count == 1
+    assert result["text"] == "ok"
 
 
 def audio_record(msg_id, ts, seconds=5, from_me=False):
@@ -168,6 +232,43 @@ def test_transcribes_only_audio_records_and_isolates_failures(client, recorder, 
     assert "text" not in result["audios"][1]
     body = rec.bodies(FIND_MESSAGES)[0]
     assert body["offset"] == 10
+
+
+def test_transcribe_chat_audios_caps_at_max_audios(client, recorder, tmp_path):
+    records = [text_record("T", 0)] + [audio_record(f"A{i}", i + 1) for i in range(12)]
+    rec = recorder({FIND_MESSAGES: find_result(*records), GET_BASE64: audio_payload()})
+    config = make_config(tmp_path)
+
+    with patch("evoapi_mcp.transcription.requests.post", return_value=OpenAIResponse(200, {"text": "x"})):
+        result = run(rec, lambda: transcribe_chat_audios(client, config, LID_JID, limit=50, page=1))
+
+    assert len(result["audios"]) == 10
+    assert result["skipped_over_cap"] == 2
+    assert result["skipped_own"] == 0
+
+
+def test_transcribe_chat_audios_skips_own_by_default(client, recorder, tmp_path):
+    records = [audio_record("mine", 1, from_me=True), audio_record("theirs", 2, from_me=False)]
+    rec = recorder({FIND_MESSAGES: find_result(*records), GET_BASE64: audio_payload()})
+    config = make_config(tmp_path)
+
+    with patch("evoapi_mcp.transcription.requests.post", return_value=OpenAIResponse(200, {"text": "x"})):
+        result = run(rec, lambda: transcribe_chat_audios(client, config, LID_JID))
+
+    assert [a["messageId"] for a in result["audios"]] == ["theirs"]
+    assert result["skipped_own"] == 1
+
+
+def test_transcribe_chat_audios_includes_own_when_asked(client, recorder, tmp_path):
+    records = [audio_record("mine", 1, from_me=True), audio_record("theirs", 2, from_me=False)]
+    rec = recorder({FIND_MESSAGES: find_result(*records), GET_BASE64: audio_payload()})
+    config = make_config(tmp_path)
+
+    with patch("evoapi_mcp.transcription.requests.post", return_value=OpenAIResponse(200, {"text": "x"})):
+        result = run(rec, lambda: transcribe_chat_audios(client, config, LID_JID, include_own=True))
+
+    assert sorted(a["messageId"] for a in result["audios"]) == ["mine", "theirs"]
+    assert result["skipped_own"] == 0
 
 
 def test_chat_audios_fails_fast_without_key(client, recorder, tmp_path):

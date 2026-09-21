@@ -75,7 +75,7 @@ def test_top_level_non_object_json_degrades_gracefully(tmp_path):
     assert ReadMarkerStore(tmp_path, "inst").get(JID) == 5
 
 
-def test_top_level_null_json_degrades_gracefully(tmp_path):
+def test_top_level_string_json_degrades_gracefully(tmp_path):
     (tmp_path / "inst.read-markers.json").write_text('"a string"')
 
     store = ReadMarkerStore(tmp_path, "inst")
@@ -84,6 +84,67 @@ def test_top_level_null_json_degrades_gracefully(tmp_path):
     assert store.all() == {}
     store.set(JID, 5)
     assert ReadMarkerStore(tmp_path, "inst").get(JID) == 5
+
+
+def test_top_level_null_json_degrades_gracefully(tmp_path):
+    (tmp_path / "inst.read-markers.json").write_text("null")
+
+    store = ReadMarkerStore(tmp_path, "inst")
+
+    assert store.get(JID) is None
+    assert store.all() == {}
+    store.set(JID, 5)
+    assert ReadMarkerStore(tmp_path, "inst").get(JID) == 5
+
+
+def test_set_stores_last_message_ids(tmp_path):
+    store = ReadMarkerStore(tmp_path, "inst")
+
+    entry = store.set(JID, 100, ["a", "b"])
+
+    assert entry["lastMessageIds"] == ["a", "b"]
+    assert store.get_entry(JID)["lastMessageIds"] == ["a", "b"]
+
+
+def test_set_without_ids_defaults_to_empty_list(tmp_path):
+    store = ReadMarkerStore(tmp_path, "inst")
+
+    entry = store.set(JID, 100)
+
+    assert entry["lastMessageIds"] == []
+
+
+def test_concurrent_stores_merge_instead_of_clobbering(tmp_path):
+    store_a = ReadMarkerStore(tmp_path, "inst")
+    store_b = ReadMarkerStore(tmp_path, "inst")
+
+    store_a.set("x@lid", 10)
+    store_b.set("y@lid", 20)
+
+    on_disk = ReadMarkerStore(tmp_path, "inst")
+    assert on_disk.get("x@lid") == 10
+    assert on_disk.get("y@lid") == 20
+
+
+def test_set_never_moves_marker_backwards(tmp_path):
+    store = ReadMarkerStore(tmp_path, "inst")
+    store.set(JID, 100)
+
+    store.set(JID, 50)
+
+    assert store.get(JID) == 100
+
+
+def test_set_with_equal_timestamp_unions_ids_across_stores(tmp_path):
+    store_a = ReadMarkerStore(tmp_path, "inst")
+    store_b = ReadMarkerStore(tmp_path, "inst")
+
+    store_a.set(JID, 100, ["a"])
+    store_b.set(JID, 100, ["b"])
+
+    entry = ReadMarkerStore(tmp_path, "inst").get_entry(JID)
+    assert entry["lastMessageTimestamp"] == 100
+    assert sorted(entry["lastMessageIds"]) == ["a", "b"]
 
 
 def test_malformed_entry_drops_non_dict_values(tmp_path):

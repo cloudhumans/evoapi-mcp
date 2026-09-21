@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from helpers import FIND_CHATS, FIND_MESSAGES, MARK_READ, GROUP_JID, LID_JID, NUMBER, PERSONAL_JID, LID_CHAT, run
@@ -89,9 +91,30 @@ def test_nothing_new_does_not_call_api_but_advances_marker(client, store, record
 
     assert rec.count(MARK_READ) == 0
     assert result["receiptsSent"] == 0
-    assert result["phoneCleared"] is True
+    assert result["phoneCleared"] is None
     assert result["reason"] == REASON_NOTHING_NEW
     assert store.get(LID_JID) == 12
+
+
+def test_boundary_record_not_in_marker_ids_is_receipted(client, store, recorder):
+    store.set(LID_JID, 20, ["kept"])
+    rec = recorder({FIND_MESSAGES: page(record("kept", 20), record("new", 20)), MARK_READ: OK})
+
+    result = run(rec, lambda: mark_chat_read(client, store, LID_JID))
+
+    assert [k["id"] for k in rec.bodies(MARK_READ)[0]["readMessages"]] == ["new"]
+    assert result["receiptsSent"] == 1
+
+
+def test_boundary_record_in_marker_ids_is_not_receipted_or_counted(client, store, recorder):
+    store.set(LID_JID, 20, ["kept"])
+    rec = recorder({FIND_MESSAGES: page(record("kept", 20))})
+
+    result = run(rec, lambda: mark_chat_read(client, store, LID_JID))
+
+    assert rec.count(MARK_READ) == 0
+    assert result["receiptsSent"] == 0
+    assert result["reason"] == REASON_NOTHING_NEW
 
 
 def test_personal_jid_without_alt_is_sent_as_is(client, store, recorder):
@@ -146,11 +169,11 @@ def test_chat_without_marker_keeps_evolution_count(client, store, recorder):
     assert rec.count(FIND_MESSAGES) == 0
 
 
-def test_marker_up_to_date_zeroes_count_without_http(client, store, recorder):
+def test_marker_strictly_newer_than_last_message_zeroes_without_http(client, store, recorder):
     store.set(LID_JID, 100)
     rec = recorder({})
 
-    out = run(rec, lambda: annotate_chats_with_markers(client, store, [chat(LID_JID, 7, 100)]))
+    out = run(rec, lambda: annotate_chats_with_markers(client, store, [chat(LID_JID, 7, 90)]))
 
     assert out[0]["unreadCount"] == 0
     assert out[0]["unreadSource"] == "local_marker"
@@ -158,16 +181,50 @@ def test_marker_up_to_date_zeroes_count_without_http(client, store, recorder):
     assert rec.count(FIND_MESSAGES) == 0
 
 
+def test_marker_equal_to_last_message_falls_through_to_recount(client, store, recorder):
+    store.set(LID_JID, 100, ["kept"])
+    rec = recorder({FIND_MESSAGES: page(record("kept", 100))})
+
+    out = run(rec, lambda: annotate_chats_with_markers(client, store, [chat(LID_JID, 7, 100)]))
+
+    assert out[0]["unreadCount"] == 0
+    assert out[0]["unreadSource"] == "local_marker"
+    assert out[0]["readMarker"]["lastMessageTimestamp"] == 100
+    assert rec.count(FIND_MESSAGES) == 1
+
+
+def test_boundary_ts_equal_marker_counts_unread_unless_in_marker_ids(client, store, recorder):
+    store.set(LID_JID, 20, ["kept"])
+    rec = recorder({FIND_MESSAGES: page(record("kept", 20), record("new", 20))})
+
+    out = run(rec, lambda: annotate_chats_with_markers(client, store, [chat(LID_JID, 999, 20)]))
+
+    assert out[0]["unreadCount"] == 1
+
+
+def test_entry_without_marker_ids_treats_boundary_as_unread(client, tmp_path, recorder):
+    (tmp_path / "test-instance.read-markers.json").write_text(json.dumps({
+        "version": 1,
+        "chats": {LID_JID: {"lastMessageTimestamp": 20, "markedAt": "2026-09-21T00:00:00+00:00"}},
+    }))
+    store = ReadMarkerStore(tmp_path, "test-instance")
+    rec = recorder({FIND_MESSAGES: page(record("boundary", 20))})
+
+    out = run(rec, lambda: annotate_chats_with_markers(client, store, [chat(LID_JID, 999, 20)]))
+
+    assert out[0]["unreadCount"] == 1
+
+
 def test_newer_messages_are_counted_after_marker(client, store, recorder):
     store.set(LID_JID, 100)
     rec = recorder({FIND_MESSAGES: page(record("a", 90), record("b", 110), record("mine", 120, from_me=True), record("c", 130))})
 
-    out = run(rec, lambda: annotate_chats_with_markers(client, store, [chat(LID_JID, 999, 130)]))
+    out = run(rec, lambda: annotate_chats_with_markers(client, store, [chat(LID_JID, 999, 130)], page_size=55))
 
     assert out[0]["unreadCount"] == 2
     assert out[0]["unreadSource"] == "local_marker"
     assert "unreadCountIsLowerBound" not in out[0]
-    assert rec.bodies(FIND_MESSAGES)[0]["offset"] == 100
+    assert rec.bodies(FIND_MESSAGES)[0]["offset"] == 55
 
 
 def test_full_page_marks_count_as_lower_bound(client, store, recorder):
@@ -193,6 +250,7 @@ def test_http_failure_falls_back_to_evolution_count(client, store, recorder, mon
 
     assert out[0]["unreadCount"] == 7
     assert out[0]["unreadSource"] == "evolution"
+    assert "readMarker" not in out[0]
 
 
 def test_chat_without_last_message_timestamp_recounts(client, store, recorder):

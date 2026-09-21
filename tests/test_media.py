@@ -4,7 +4,7 @@ import pytest
 
 from helpers import GET_BASE64, run
 from evoapi_mcp.client import EvolutionAPIError
-from evoapi_mcp.media import download_media, extension_for, save_media
+from evoapi_mcp.media import AUDIO_EXTENSIONS, download_media, extension_for, save_media
 
 AUDIO_BYTES = b"OggS\x00fake-opus-bytes"
 
@@ -77,6 +77,25 @@ def test_save_media_without_base64_raises(tmp_path):
         save_media({"mediaType": "conversation"}, tmp_path, "MSG1")
 
 
+def test_audio_extensions_are_derived_from_known_extensions():
+    assert AUDIO_EXTENSIONS == {".ogg", ".mp3", ".m4a"}
+
+
+@pytest.mark.parametrize("message_id", ["../escape", "a/b", "a*b", "a[b]", "a b"])
+def test_save_media_rejects_path_unsafe_message_id(tmp_path, message_id):
+    with pytest.raises(ValueError):
+        save_media(payload(), tmp_path, message_id)
+
+
+def test_download_media_rejects_path_unsafe_message_id(client, recorder, tmp_path):
+    rec = recorder({GET_BASE64: payload()})
+
+    with pytest.raises(ValueError):
+        run(rec, lambda: download_media(client, tmp_path, "../escape"))
+
+    assert rec.count(GET_BASE64) == 0
+
+
 def test_download_media_calls_api_and_saves(client, recorder, tmp_path):
     rec = recorder({GET_BASE64: payload()})
 
@@ -85,6 +104,16 @@ def test_download_media_calls_api_and_saves(client, recorder, tmp_path):
     assert rec.bodies(GET_BASE64) == [{"message": {"key": {"id": "MSG1"}}}]
     assert (tmp_path / "MSG1.ogg").exists()
     assert result["cached"] is False
+
+
+def test_download_media_ignores_transcript_json_sidecar(client, recorder, tmp_path):
+    (tmp_path / "MSG1.transcript.json").write_text('{"model": "m", "language": "pt"}')
+    rec = recorder({GET_BASE64: payload()})
+
+    result = run(rec, lambda: download_media(client, tmp_path, "MSG1"))
+
+    assert result["cached"] is False
+    assert rec.count(GET_BASE64) == 1
 
 
 def test_download_media_skips_api_when_cached(client, recorder, tmp_path):

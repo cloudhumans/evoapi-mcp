@@ -1,6 +1,7 @@
 import base64
 import mimetypes
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,17 @@ KNOWN_EXTENSIONS = {
     "video/mp4": ".mp4",
     "application/pdf": ".pdf",
 }
+
+AUDIO_EXTENSIONS = {ext for mimetype, ext in KNOWN_EXTENSIONS.items() if mimetype.startswith("audio/")}
+
+MESSAGE_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _validate_message_id(message_id: str) -> None:
+    if not MESSAGE_ID_PATTERN.fullmatch(message_id):
+        raise ValueError(
+            f"message_id inválido: {message_id!r}. Use apenas letras, números, '_' e '-'."
+        )
 
 
 def extension_for(mimetype: str | None) -> str:
@@ -45,12 +57,15 @@ def _find_cached(media_dir: Path, message_id: str) -> Path | None:
     if not media_dir.exists():
         return None
     for candidate in media_dir.glob(f"{message_id}.*"):
-        if candidate.suffix != ".txt" and candidate.suffix != ".tmp" and candidate.stat().st_size > 0:
+        if candidate.suffix in (".txt", ".tmp", ".json"):
+            continue
+        if candidate.stat().st_size > 0:
             return candidate
     return None
 
 
 def save_media(payload: dict[str, Any], media_dir: Path, message_id: str) -> dict[str, Any]:
+    _validate_message_id(message_id)
     encoded = payload.get("base64") if isinstance(payload, dict) else None
     if not encoded:
         raise EvolutionAPIError(
@@ -72,6 +87,7 @@ def save_media(payload: dict[str, Any], media_dir: Path, message_id: str) -> dic
 
 def download_media(client: EvolutionClient, media_dir: Path, message_id: str) -> dict[str, Any]:
     message_id = message_id.strip()
+    _validate_message_id(message_id)
     media_dir = Path(media_dir).expanduser()
     cached = _find_cached(media_dir, message_id)
     if cached:

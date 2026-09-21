@@ -32,7 +32,22 @@ def _timestamp(record: dict[str, Any]) -> int:
         return 0
 
 
-def _pending_keys(records: list[dict[str, Any]], marker_before: int | None) -> list[dict[str, Any]]:
+def _is_unread(ts: int, message_id: str | None, marker_before: int | None, marker_ids: set[str]) -> bool:
+    if marker_before is None:
+        return True
+    if ts > marker_before:
+        return True
+    if ts == marker_before and message_id not in marker_ids:
+        return True
+    return False
+
+
+def _pending_keys(
+    records: list[dict[str, Any]],
+    marker_before: int | None,
+    marker_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    marker_ids = marker_ids or set()
     seen: set[str] = set()
     pending: list[dict[str, Any]] = []
     for record in records:
@@ -40,7 +55,7 @@ def _pending_keys(records: list[dict[str, Any]], marker_before: int | None) -> l
         message_id = key.get("id")
         if not message_id or key.get("fromMe") or message_id in seen:
             continue
-        if marker_before is not None and _timestamp(record) <= marker_before:
+        if not _is_unread(_timestamp(record), message_id, marker_before, marker_ids):
             continue
         seen.add(message_id)
         pending.append(receipt_key(key))
@@ -72,8 +87,10 @@ def mark_chat_read(
         result["reason"] = REASON_NOT_FOUND
         return result
 
-    marker_before = store.get(jid)
-    pending = _pending_keys(records, marker_before)
+    marker_entry = store.get_entry(jid)
+    marker_before = marker_entry["lastMessageTimestamp"] if marker_entry else None
+    marker_ids = set(marker_entry.get("lastMessageIds") or []) if marker_entry else set()
+    pending = _pending_keys(records, marker_before, marker_ids)
     is_group = jid.endswith(GROUP_JID_SUFFIX)
 
     if is_group:
@@ -84,11 +101,16 @@ def mark_chat_read(
         result["phoneCleared"] = True
     else:
         result["reason"] = REASON_NOTHING_NEW
-        result["phoneCleared"] = True
+        result["phoneCleared"] = None
 
     newest = max((_timestamp(r) for r in records), default=0)
     if newest:
-        store.set(jid, newest)
+        newest_ids = sorted({
+            (record.get("key") or {}).get("id")
+            for record in records
+            if _timestamp(record) == newest and (record.get("key") or {}).get("id")
+        })
+        store.set(jid, newest, newest_ids)
         result["markerTimestamp"] = newest
 
     return result
@@ -102,11 +124,19 @@ def _last_message_timestamp(chat: dict[str, Any]) -> int | None:
     return _timestamp({"messageTimestamp": value})
 
 
-def _count_unread_since(client: EvolutionClient, jid: str, marker: int, page_size: int) -> tuple[int, bool]:
+def _count_unread_since(
+    client: EvolutionClient,
+    jid: str,
+    marker: int,
+    page_size: int,
+    marker_ids: set[str] | None = None,
+) -> tuple[int, bool]:
+    marker_ids = marker_ids or set()
     records = _records(client.find_messages(chat_id=jid, limit=page_size))
     count = sum(
         1 for r in records
-        if not (r.get("key") or {}).get("fromMe") and _timestamp(r) > marker
+        if not (r.get("key") or {}).get("fromMe")
+        and _is_unread(_timestamp(r), (r.get("key") or {}).get("id"), marker, marker_ids)
     )
     return count, len(records) >= page_size
 
@@ -125,16 +155,17 @@ def annotate_chats_with_markers(
             continue
 
         marker = int(entry["lastMessageTimestamp"])
-        chat["readMarker"] = entry
+        marker_ids = set(entry.get("lastMessageIds") or [])
         last_ts = _last_message_timestamp(chat)
 
-        if last_ts is not None and last_ts <= marker:
+        if last_ts is not None and last_ts < marker:
             chat["unreadCount"] = 0
             chat["unreadSource"] = "local_marker"
+            chat["readMarker"] = entry
             continue
 
         try:
-            count, is_lower_bound = _count_unread_since(client, jid, marker, page_size)
+            count, is_lower_bound = _count_unread_since(client, jid, marker, page_size, marker_ids)
         except EvolutionAPIError as error:
             client._log(f"Unread recount failed for {jid}: {error}", "WARNING")
             chat["unreadSource"] = "evolution"
@@ -142,6 +173,7 @@ def annotate_chats_with_markers(
 
         chat["unreadCount"] = count
         chat["unreadSource"] = "local_marker"
+        chat["readMarker"] = entry
         if is_lower_bound:
             chat["unreadCountIsLowerBound"] = True
 
