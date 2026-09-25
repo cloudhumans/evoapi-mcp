@@ -7,6 +7,36 @@ e este projeto adere ao [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ---
 
+## [1.3.0] - 2026-09-20
+
+### ✨ Adicionado
+
+- **`mark_as_read(chats)`**: marca uma ou várias conversas como lidas. Manda read
+  receipts (1:1 limpa o celular; `@lid` via `remoteJidAlt`) e grava um marcador de
+  leitura local em `EVOLUTION_STATE_DIR`. Grupo só recebe marcador, porque a Evolution
+  2.3.7 perde o `participant` da chave. Nunca deve ser chamada automaticamente; a
+  descrição da tool diz isso em maiúsculas.
+- **`list_chats` respeita o marcador**: `unreadCount` passa a ser calculado a partir do
+  marcador quando ele existe (`unreadSource: "local_marker"`), porque o contador da
+  Evolution só sobe.
+- **`download_media(message_id)`**: salva a mídia em `EVOLUTION_MEDIA_DIR` e devolve o
+  caminho, nunca o base64.
+- **`transcribe_audio(message_id)`** e **`transcribe_chat_audios(chat)`**: transcrição
+  via OpenAI (`OPENAI_API_KEY`, mesma variável do plugin ch-shared), com cache do texto em
+  `<id>.transcript.txt`.
+
+### 🔧 Corrigido
+
+- `list_chats` sem marcador continua com o mesmo `unreadCount`/`unreadSource` de antes,
+  mas toda resposta agora ganha a chave `unreadSource`, que não existia — mudança de
+  formato, mesmo pra quem nunca chamou `mark_as_read`.
+
+### 📝 Verificado
+
+Três limitações da Evolution API 2.3.7 documentadas no README e em `KNOWN_ISSUES.md`
+(#15 a #17 — #14 já estava em uso): `@lid` descartado em `markMessageAsRead`,
+`participant` perdido em grupo, `unreadCount` que nunca decrementa.
+
 ## [1.2.1] - 2026-08-27
 
 ### 🔧 Corrigido

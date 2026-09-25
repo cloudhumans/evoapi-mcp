@@ -1,6 +1,7 @@
 """Configuração do MCP Evolution API."""
 
 import sys
+from pathlib import Path
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -33,13 +34,33 @@ class EvolutionConfig(BaseSettings):
         ge=5,
         le=300
     )
+    state_dir: Path = Field(
+        default=Path("~/.local/state/evoapi-mcp"),
+        description="Diretório do estado local (marcadores de leitura)"
+    )
+    media_dir: Path = Field(
+        default=Path("~/Downloads/whatsapp-media"),
+        description="Diretório onde mídia baixada é salva"
+    )
+    openai_api_key: str | None = Field(
+        default=None,
+        validation_alias="OPENAI_API_KEY",
+        description="Chave da OpenAI usada só pela transcrição de áudio"
+    )
+    openai_transcribe_model: str = Field(
+        default="gpt-4o-mini-transcribe",
+        validation_alias="OPENAI_TRANSCRIBE_MODEL",
+        description="Modelo de transcrição da OpenAI"
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="EVOLUTION_",
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        extra="ignore"
+        extra="ignore",
+        validate_by_name=True,
+        validate_by_alias=True
     )
 
     @field_validator("base_url")
@@ -55,6 +76,11 @@ class EvolutionConfig(BaseSettings):
         if not v or not v.strip():
             raise ValueError("Campo não pode estar vazio")
         return v.strip()
+
+    @field_validator("state_dir", "media_dir")
+    @classmethod
+    def expand_directory(cls, v: Path) -> Path:
+        return Path(v).expanduser()
 
 
 def load_config() -> EvolutionConfig:

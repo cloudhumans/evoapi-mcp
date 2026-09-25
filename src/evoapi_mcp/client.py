@@ -722,6 +722,30 @@ class EvolutionClient:
         """
         return self.find_messages(chat_id=number, limit=limit, page=page)
 
+    def mark_messages_read(self, keys: list[dict[str, Any]]) -> dict[str, Any]:
+        if not keys:
+            raise ValueError("keys não pode ser vazio")
+
+        self._log(f"Marking {len(keys)} messages as read")
+
+        return self._make_request(
+            "POST",
+            "/chat/markMessageAsRead/{instanceId}",
+            data={"readMessages": keys}
+        )
+
+    def get_media_base64(self, message_id: str) -> dict[str, Any]:
+        if not message_id or not message_id.strip():
+            raise ValueError("message_id não pode ser vazio")
+
+        self._log(f"Fetching media for message {message_id.strip()}")
+
+        return self._make_request(
+            "POST",
+            "/chat/getBase64FromMediaMessage/{instanceId}",
+            data={"message": {"key": {"id": message_id.strip()}}}
+        )
+
     def fetch_contacts(self, contact_id: str | None = None) -> list[dict[str, Any]]:
         """Busca contatos salvos no WhatsApp com filtros opcionais.
 
