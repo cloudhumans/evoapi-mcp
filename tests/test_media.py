@@ -1,4 +1,5 @@
 import base64
+from pathlib import Path
 
 import pytest
 
@@ -157,3 +158,66 @@ def test_download_media_skips_api_when_cached(client, recorder, tmp_path):
     assert result["cached"] is True
     assert result["mimetype"] is None
     assert rec.count(GET_BASE64) == 0
+
+
+@pytest.mark.parametrize("glob_order", ["media_first", "txt_first"])
+def test_download_media_prefers_media_over_legacy_txt_sidecar(client, recorder, tmp_path, monkeypatch, glob_order):
+    media = tmp_path / "MSG1.ogg"
+    media.write_bytes(AUDIO_BYTES)
+    legacy_txt = tmp_path / "MSG1.txt"
+    legacy_txt.write_text("transcrição legada")
+    ordered = [media, legacy_txt] if glob_order == "media_first" else [legacy_txt, media]
+    monkeypatch.setattr(Path, "glob", lambda self, pattern: iter(ordered))
+    rec = recorder({GET_BASE64: payload()})
+
+    result = run(rec, lambda: download_media(client, tmp_path, "MSG1"))
+
+    assert result["cached"] is True
+    assert result["path"] == str(media)
+    assert rec.count(GET_BASE64) == 0
+
+
+def test_download_media_still_returns_lone_txt_document(client, recorder, tmp_path):
+    (tmp_path / "MSG1.txt").write_bytes(b"plain text document contents")
+    rec = recorder({GET_BASE64: payload()})
+
+    result = run(rec, lambda: download_media(client, tmp_path, "MSG1"))
+
+    assert result["cached"] is True
+    assert result["path"] == str(tmp_path / "MSG1.txt")
+    assert rec.count(GET_BASE64) == 0
+
+
+def test_download_media_ignores_transcript_sidecars_alongside_legacy_txt(client, recorder, tmp_path, monkeypatch):
+    media = tmp_path / "MSG1.ogg"
+    media.write_bytes(AUDIO_BYTES)
+    legacy_txt = tmp_path / "MSG1.txt"
+    legacy_txt.write_text("transcrição legada")
+    transcript_txt = tmp_path / "MSG1.transcript.txt"
+    transcript_txt.write_text("já transcrito")
+    transcript_json = tmp_path / "MSG1.transcript.json"
+    transcript_json.write_text('{"model": "m", "language": "pt"}')
+    ordered = [transcript_txt, legacy_txt, transcript_json, media]
+    monkeypatch.setattr(Path, "glob", lambda self, pattern: iter(ordered))
+    rec = recorder({GET_BASE64: payload()})
+
+    result = run(rec, lambda: download_media(client, tmp_path, "MSG1"))
+
+    assert result["cached"] is True
+    assert result["path"] == str(media)
+    assert rec.count(GET_BASE64) == 0
+
+
+@pytest.mark.parametrize("glob_order", ["ogg_first", "mp3_first"])
+def test_download_media_is_deterministic_across_media_candidates(client, recorder, tmp_path, monkeypatch, glob_order):
+    ogg = tmp_path / "MSG1.ogg"
+    ogg.write_bytes(AUDIO_BYTES)
+    mp3 = tmp_path / "MSG1.mp3"
+    mp3.write_bytes(AUDIO_BYTES)
+    ordered = [ogg, mp3] if glob_order == "ogg_first" else [mp3, ogg]
+    monkeypatch.setattr(Path, "glob", lambda self, pattern: iter(ordered))
+    rec = recorder({GET_BASE64: payload()})
+
+    result = run(rec, lambda: download_media(client, tmp_path, "MSG1"))
+
+    assert result["path"] == str(mp3)
