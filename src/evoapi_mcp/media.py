@@ -22,6 +22,8 @@ KNOWN_EXTENSIONS = {
 
 AUDIO_EXTENSIONS = {ext for mimetype, ext in KNOWN_EXTENSIONS.items() if mimetype.startswith("audio/")}
 
+KNOWN_MEDIA_EXTENSIONS = set(KNOWN_EXTENSIONS.values())
+
 MESSAGE_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
 
 
@@ -56,14 +58,20 @@ def _result(path: Path, payload: dict[str, Any], cached: bool) -> dict[str, Any]
 def _find_cached(media_dir: Path, message_id: str) -> Path | None:
     if not media_dir.exists():
         return None
+    candidates = []
     for candidate in media_dir.glob(f"{message_id}.*"):
         if candidate.suffix == ".tmp":
             continue
         if candidate.suffixes[:1] == [".transcript"]:
             continue
         if candidate.stat().st_size > 0:
-            return candidate
-    return None
+            candidates.append(candidate)
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda path: (path.suffix not in KNOWN_MEDIA_EXTENSIONS, path.name),
+    )
 
 
 def save_media(payload: dict[str, Any], media_dir: Path, message_id: str) -> dict[str, Any]:

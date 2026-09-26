@@ -7,6 +7,18 @@ e este projeto adere ao [Semantic Versioning](https://semver.org/lang/pt-BR/).
 
 ---
 
+## [1.3.1] - 2026-09-26
+
+### 🐛 Corrigido
+
+- `download_media` podia devolver uma transcrição antiga (`<id>.txt`, formato usado
+  antes da 1.3.0) no lugar da mídia real. `_find_cached` agora prioriza mídia conhecida
+  sobre qualquer outro arquivo com o mesmo `message_id` e desempata por nome de arquivo
+  ordenado, então o resultado não depende mais da ordem (não garantida) do `glob` do
+  sistema de arquivos. Um `<id>.txt` legado cujo par de mídia foi apagado continua
+  indistinguível de um documento de texto — `transcribe_audio` já recusa esse caso com
+  uma mensagem clara, e nenhuma migração foi criada para ele.
+
 ## [1.3.0] - 2026-09-20
 
 ### ✨ Adicionado
